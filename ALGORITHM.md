@@ -30,9 +30,10 @@ the whole category, dozens of engines instead of one, and nothing in the answer
 shows it.
 
 **2a. Where the pool came from is part of the answer.** `pool_source` is
-`computed` when observations were enough to compute it and `seed` when they were
-not — the starting list is then returned AND SAID to be the starting list, with
-`pool_reason` in words. A pool is never invented to look computed.
+`observation` when there were enough probes to compute the pool from, and `seed`
+when there were not — the starting list is then returned AND SAID to be the
+starting list, with `pool_reason` in words. A pool is never invented to look
+measured.
 
 **3. Read the trust labels.** From the prober's database: which engines can be
 trusted in the sense of substituting the subject. Cached — the prober adds one

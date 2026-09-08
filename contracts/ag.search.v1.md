@@ -62,7 +62,7 @@ Also accepted: `read` (default true), `read_top`, `min_engines`, `per_engine`.
   "engines_trust":        {"engine-a": "clean", "engine-c": "not_checked"},
   "all_engines_clean":    false,
   "search_aborted":       "",
-  "pool_source":          "computed",
+  "pool_source":          "observation",
   "pool_reason":          "…",
   "arguments_adjusted":   [],
   "pages_read": 3, "pages_empty": 0, "pages_failed": 0,
@@ -70,9 +70,9 @@ Also accepted: `read` (default true), `read_top`, `min_engines`, `per_engine`.
 }
 ```
 
-**`pool_source` says where the engine list came from**: `computed` — from
-observation; `seed` — there were not enough observations, so the starting list
-was returned AND NAMED. The pool is never invented, and the failure direction is
+**`pool_source` says where the engine list came from**: `observation` — the
+pool was computed from probes; `seed` — there were not enough of them, so the
+starting list was returned AND NAMED. The pool is never invented, and the failure direction is
 the module's own: no data means "not checked", never "sound". `pool_reason`
 carries it in words.
 

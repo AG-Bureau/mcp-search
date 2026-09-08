@@ -185,7 +185,7 @@ repeat the query because the list was empty — repeat it rephrased.
 | `engines_skipped` | **not asked**: the rate limit, or cooling after a refusal |
 | `unresponsive_engines` | asked and stayed silent |
 | `engines_irrelevant` | answered a different question — results discarded |
-| `pool_source` | `computed` from observation, or `seed` — the starting list, because there were not enough observations to compute one |
+| `pool_source` | `observation` — computed from probes; or `seed` — the starting list, because there were not enough probes to compute one |
 | `search_aborted` | non-empty means the metasearch died MID-SWEEP |
 | `engines_unasked` | who was missed because of that abort, and only them |
 
