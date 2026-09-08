@@ -1,19 +1,31 @@
-# search — web search as a module
+<div align="center">
 
-[![MCP registry](https://img.shields.io/badge/MCP%20registry-com.ag--bureau%2Fsearch-2ea44f)](https://registry.modelcontextprotocol.io)
-[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+# search
 
-**A self-hosted MCP server for web search that reports how much of each answer to
-believe.** It runs on your machine, over your own metasearch instance, with your
-own model key — or none at all.
+**A self-hosted MCP server for web search that reports how much of each answer to believe**
+
+[![MCP registry](https://img.shields.io/badge/MCP_registry-com.ag--bureau%2Fsearch-2ea44f?style=for-the-badge)](https://registry.modelcontextprotocol.io)
+[![License](https://img.shields.io/badge/License-AGPL--3.0-E23A50?style=for-the-badge)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white&style=for-the-badge)](adapter/Dockerfile)
+[![Self-hosted](https://img.shields.io/badge/Self--hosted-Docker_Compose-2496ED?logo=docker&logoColor=white&style=for-the-badge)](#-install)
+
+[![Glama score](https://glama.ai/mcp/servers/AG-Bureau/mcp-search/badge)](https://glama.ai/mcp/servers/AG-Bureau/mcp-search)
+
+</div>
+
+---
 
 A search tool fails in ways that look exactly like success. An engine answers with
 somebody else's subject. A page returns text that is an anti-bot shield. Sixteen
 sources turn out to be two engines counted eight times. None of that raises an
-error, and the model on the other end builds on it. This server's job is to make
-those cases *distinguishable*, in fields you can branch on.
+error, and the model on the other end builds on it.
 
-## Tools
+**This server's job is to make those cases distinguishable, in fields you can
+branch on.** It runs on your machine, over your own metasearch instance, with your
+own model key — or none at all.
+
+
+## 🔧 Tools
 
 | Tool | What it does | Required | Notable options |
 |---|---|---|---|
@@ -25,7 +37,7 @@ those cases *distinguishable*, in fields you can branch on.
 
 Full argument reference, response shapes and failure modes: **[HOWTO-CALL.md](HOWTO-CALL.md)**.
 
-## Install
+## 📦 Install
 
 From an open repository page to a working answer. Nothing is assumed to be on
 your disk already:
@@ -46,7 +58,7 @@ template, silently.
 
 The overlay publishes the port **on loopback only**. A published container port
 does not go through the host firewall's usual chain, so exposing it more widely
-is a separate, deliberate step — see [Deployment](#deployment-and-exposure).
+is a separate, deliberate step — see [Deployment](#-deployment-and-exposure).
 
 ### Two transports
 
@@ -71,7 +83,7 @@ project around it, the module still works and names what is missing instead of
 pretending: the browser path reports `not_wired_up`, and the engine pool comes
 back as `pool_source: seed`.
 
-## Configuration
+## ⚙️ Configuration
 
 | Variable | Required | What it is |
 |---|---|---|
@@ -94,7 +106,7 @@ and both are named in the answer: `web_deep_search`, and recognising a PDF with 
 text layer — which happens only when you ask to read such a document, never behind
 your back in a search.
 
-## What this does that a bundled search tool does not
+## 🎯 What a bundled search tool does not do
 
 **Cost you control.** One argument changes the answer by an order of magnitude:
 
@@ -135,7 +147,7 @@ what shows each:
 The same applies to reading: seven distinct outcomes, and a page that returned a
 shield is `stub`, not empty text.
 
-## How it works
+## 📖 How it works
 
 - **[ALGORITHM.md](ALGORITHM.md)** — what happens, step by step, on each call.
 - **[contracts/](contracts/)** — the call contracts, versioned separately from
@@ -144,7 +156,7 @@ shield is `stub`, not empty text.
   the load ladder gives, what the transport change bought. Numbers, with what was
   measured and when.
 
-## Deployment and exposure
+## 🔒 Deployment and exposure
 
 `wiring/expose-localhost.yml` publishes the adapter on `127.0.0.1` only. Anything
 wider is a separate overlay, and its header says what to check first: Docker
@@ -155,7 +167,7 @@ be open to the internet on a published port.
 A search server open to the outside is an open proxy that goes to the network in
 the machine owner's name.
 
-## Tests
+## ✅ Tests
 
 ```bash
 IMAGE=ag-mod-search/adapter:0.2.1 bash tests/in-image.sh
@@ -175,14 +187,14 @@ note saying where to run it.
 What these suites cannot check is written down in
 [tests/README.md](tests/README.md).
 
-## Contributing
+## 🤝 Contributing
 
 A capability, engine or heuristic is not accepted until its **reference
 attribute** is declared — a property of the correct answer that the thing being
 tested could not have told us itself — and a pool of checked questions is
 attached. See [CONTRIBUTING](https://github.com/AG-Bureau/.github/blob/main/CONTRIBUTING.md).
 
-## License
+## 📄 License
 
 [GNU Affero General Public License v3.0](LICENSE). Run it, change it, build on
 it. If you make it available to others OVER A NETWORK, the changes you made go
