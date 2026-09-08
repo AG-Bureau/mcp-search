@@ -111,7 +111,7 @@ DOMAIN_WAIT_MAX_S = 8.0
 # language the web answers in, on behalf of an operator who was never asked; the
 # default is therefore no preference at all. Setting it is a documented example,
 # not a default.
-VERSION = "0.2"
+VERSION = "0.2.1"
 READ_HOME = "https://github.com/AG-Bureau/mcp-search"
 READ_CONTACT = (os.environ.get("READ_CONTACT") or "").strip() or READ_HOME
 READ_LANGUAGES = (os.environ.get("READ_LANGUAGES") or "").strip()

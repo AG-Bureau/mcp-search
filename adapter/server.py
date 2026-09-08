@@ -87,7 +87,12 @@ def _ago(t: float | None) -> str | None:
 
 CONTRACT = "ag.search/1"
 PROTOCOL = "2024-11-05"                      # the same as the caller's MCP server
-SERVER = {"name": "ag-mod-search", "version": "1"}
+# THE VERSION IS TAKEN FROM ONE PLACE, not written out here as well. A literal
+# would be a second truth about the same thing: the release it names and the one
+# a site administrator sees in our `User-Agent` would drift apart, and nothing
+# would report it. `1` used to stand here — internal numbering that matched no
+# release at all.
+SERVER = {"name": "ag-mod-search", "version": reader.VERSION}
 
 SEARXNG_URL = (os.environ.get("SEARXNG_URL") or "http://searxng:8080").strip().rstrip("/")
 PORT = int(os.environ.get("PORT") or "8081")
@@ -2526,7 +2531,85 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
 
 
+def _stdio() -> None:
+    """MCP over stdio: one JSON-RPC object per line in, one answer per line out.
+
+    THE DEFAULT TRANSPORT OF THE PROTOCOL, and its absence was invisible here for
+    one reason: our only consumer speaks HTTP. A desktop client starts the server
+    as a PROCESS and talks to it through the pipes; with no stdio the module is
+    unusable by most clients that exist, and nothing in our own testing could show
+    it.
+
+    STDOUT BECOMES THE PROTOCOL, and that is the whole danger of this mode. One
+    stray `print` — the start-up banner, a diagnostic from the pool — lands in the
+    middle of the conversation, and a client reading a line at a time sees a
+    broken message. A real wrapper answered our banner with `ignoring non-JSON
+    output` and gave up sixty seconds later.
+
+    So the real stdout is taken ONCE, here, and `sys.stdout` is pointed at
+    stderr for the rest of the process. Every print in this module and in every
+    module it imports becomes diagnostics BY CONSTRUCTION. Auditing the existing
+    ten print sites would fix today and say nothing about the eleventh.
+
+    The behaviour itself is not duplicated: both doors call the same `rpc()`,
+    which was written to take a parsed body and never raise. Two transports over
+    two implementations would diverge at the first edit.
+    """
+    import sys
+    out = sys.stdout                  # taken BEFORE the substitution below
+    sys.stdout = sys.stderr           # every print is now diagnostics
+    print(f"ag-mod-search: MCP over stdio, metasearch={SEARXNG_URL}", flush=True)
+
+    def answer(payload) -> None:
+        out.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        out.flush()                   # a client reads line by line and waits
+
+    while True:
+        line = sys.stdin.readline()
+        if not line:                  # EOF: the client closed the pipe
+            return
+        line = line.strip()
+        if not line:                  # a blank line is not a message
+            continue
+        try:
+            body = json.loads(line)
+        except Exception:  # noqa: BLE001
+            # A BROKEN LINE IS ANSWERED, NOT SWALLOWED. Silence here is
+            # indistinguishable from a hung server, and the client waits out its
+            # whole timeout to learn nothing.
+            answer({"jsonrpc": "2.0", "id": None,
+                    "error": {"code": -32700, "message": "the line is not JSON"}})
+            continue
+        # A batch is a list, exactly as over HTTP, and is counted item by item:
+        # an array of calls must not bypass the one view that answers "is anything
+        # calling us".
+        if isinstance(body, list):
+            batch = []
+            for x in body:
+                r = rpc(x)
+                _count_mcp_call(x, r)
+                if r is not None:
+                    batch.append(r)
+            if batch:
+                answer(batch)
+            continue
+        res = rpc(body)
+        _count_mcp_call(body, res)
+        # A notification has no id and gets NO line back. Answering it would put
+        # an unmatched message into a stream the client reads by correlation.
+        if res is not None:
+            answer(res)
+
+
 def main() -> None:
+    # THE TRANSPORT IS CHOSEN EXPLICITLY, NEVER GUESSED. A guess of the form "is
+    # there a terminal on stdin" reads a sign that MERELY SITS NEXT TO the
+    # subject: it is true of a pipe in a shell script as well, and one day it
+    # answers for a case nobody meant.
+    import sys
+    if "--stdio" in sys.argv[1:] or (os.environ.get("MCP_TRANSPORT") or "").strip().lower() == "stdio":
+        _stdio()
+        return
     srv = Server(("0.0.0.0", PORT), Handler)
     print(f"ag-mod-search: MCP on POST :{PORT}/mcp, "
           f"ag.search/1 on GET :{PORT}/ag/search, metasearch={SEARXNG_URL}",

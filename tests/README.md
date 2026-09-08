@@ -19,7 +19,7 @@ always computes the same thing passes any check of the form "the pool is
 non-empty" and never notices an engine degrading — the very thing it exists for.
 
 ```bash
-IMAGE=ag-mod-search/adapter:1 bash tests/in-image.sh
+IMAGE=ag-mod-search/adapter:0.2.1 bash tests/in-image.sh
 ```
 
 They run inside the module image, because the PDF parser lives there. Run

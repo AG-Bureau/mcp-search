@@ -25,6 +25,15 @@ consumers:
     endpoint: POST http://<host>:8081/mcp        # JSON-RPC 2.0, protocol 2024-11-05
     server_name: ag-mod-search
     tools: [web_search, web_read, web_image_search, web_screenshot, web_deep_search]
+  mcp_stdio:
+    # The protocol's DEFAULT transport: the client starts the process and talks
+    # through the pipes. One object per line in, one answer per line out; stdout
+    # carries answers and nothing else, the log goes to stderr.
+    command: python adapter/server.py --stdio    # or MCP_TRANSPORT=stdio
+    server_name: ag-mod-search
+    tools: [web_search, web_read, web_image_search, web_screenshot, web_deep_search]
+    # Started this way with no sidecars, the module still works and says what is
+    # missing: the browser path reports not_wired_up, the pool comes back as seed.
   http_search:
     endpoint: GET http://<host>:8081/ag/search?q=&n=&page=&read=&min_engines=
     contract: ag.search/1                        # contracts/ag.search.v1.md

@@ -5,14 +5,16 @@
 > below is taken from `adapter/server.py` and `adapter/reader.py`. If the service
 > stops matching this document, the service has diverged, not the document.
 
-Five capabilities behind three doors. This page is how to call them and — more
+Five capabilities behind three doors — and the first of them opens two ways, over
+HTTP and over stdio. This page is how to call them and — more
 importantly — **how to read what comes back**, because in this module a failure
 and a success often look alike unless you know which field separates them.
 
 ## Contents
 
-Address · MCP door · HTTP door · views · the five tools · how to read a search
-answer · the seven reading outcomes · deep search · limits · how to check it works
+Address · MCP door, over HTTP and over stdio · HTTP door · views · the five tools
+· how to read a search answer · the seven reading outcomes · deep search · limits
+· how to check it works
 
 ## Address
 
@@ -52,7 +54,7 @@ curl -s -X POST http://<host>:8081/mcp -H 'Content-Type: application/json' \
 ```json
 {"jsonrpc":"2.0","id":1,"result":{
   "protocolVersion":"2024-11-05",
-  "serverInfo":{"name":"ag-mod-search","version":"1"},
+  "serverInfo":{"name":"ag-mod-search","version":"0.2.1"},
   "capabilities":{"tools":{"listChanged":false}}}}
 ```
 
@@ -73,6 +75,36 @@ below. `result.isError` is true only when the TOOL did not do its work; an empty
 result set is not an error.
 
 Batches are supported and each call in a batch is counted separately.
+
+### The same door over stdio, for clients that START the server
+
+MCP has two transports, and stdio is the default one: the client runs the server
+as a PROCESS and talks to it through the pipes. Desktop clients and most wrappers
+work that way; HTTP is for the case where the server is already running
+somewhere.
+
+```bash
+python adapter/server.py --stdio        # or MCP_TRANSPORT=stdio
+```
+
+One JSON-RPC object per line in, one answer per line out. Notifications get no
+line back, batches are a JSON array on one line, and a line that is not JSON is
+answered with `-32700` rather than swallowed.
+
+**In this mode stdout IS the protocol.** Everything that is not an answer —
+the start-up line, engine-registry diagnostics, trust-database warnings — goes to
+stderr. Read the log there; a client that reads stdout must see nothing but
+messages.
+
+The transport is chosen explicitly and never guessed from whether a terminal is
+attached: that sign merely sits next to the subject and would one day answer for
+a case nobody meant.
+
+**What stdio does not change: the sidecars.** The browser and the prober are
+separate processes reached over the network. Started by a client with no compose
+project around it, the module works — and says so honestly: the browser path
+reports `not_wired_up`, and the pool comes back with `pool_source: seed` because
+there are no observations to compute from.
 
 ## Door 2 — plain HTTP, for anything that speaks GET
 

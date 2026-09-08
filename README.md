@@ -1,40 +1,29 @@
 # search — web search as a module
 
-Five capabilities behind one MCP server: **find** (`web_search`), **read**
-(`web_read`), **find images** (`web_image_search`), **screenshot a page**
-(`web_screenshot`), and **answer a question from several sources**
-(`web_deep_search`).
+[![MCP registry](https://img.shields.io/badge/MCP%20registry-com.ag--bureau%2Fsearch-2ea44f)](https://registry.modelcontextprotocol.io)
+[![License: FSL-1.1-ALv2](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue)](LICENSE)
 
-The module keeps no index of its own. It queries other people's search engines
-through a metasearch container, and everything it adds is about one problem:
+**A self-hosted MCP server for web search that reports how much of each answer to
+believe.** It runs on your machine, over your own metasearch instance, with your
+own model key — or none at all.
 
-> **A search tool fails in ways that look exactly like success.** An engine
-> answers with somebody else's subject; a page returns text that is an anti-bot
-> shield; a corpus of sixteen sources turns out to be two engines counted eight
-> times. This module's job is to make those cases *distinguishable*, and to say
-> so in fields you can branch on.
+A search tool fails in ways that look exactly like success. An engine answers with
+somebody else's subject. A page returns text that is an anti-bot shield. Sixteen
+sources turn out to be two engines counted eight times. None of that raises an
+error, and the model on the other end builds on it. This server's job is to make
+those cases *distinguishable*, in fields you can branch on.
 
-**Search reads by default.** The top three results come back with their text in
-`content`, so one call answers a question instead of handing over links. The
-cheap path is still there: `read: false` returns links alone in a fraction of a
-second.
+## Tools
 
-Three of the tools are easy to confuse, so the line is drawn explicitly:
-`web_search` and `web_read` return **material**; `web_deep_search` returns a
-**judgement** — it composes its own queries, goes in waves, and says what it
-failed to find.
+| Tool | What it does | Required | Notable options |
+|---|---|---|---|
+| `web_search` | Finds pages **and reads the top ones** — one call, links with their text | `query` | `read: false` for links only · `read_top` how many to read · `min_engines` to force breadth · `corroborate` |
+| `web_read` | Reads pages by address: text, PDF, or a scan recognised by a vision model | `urls` | `mode: browser` for JS-rendered pages · `expect` to assert what must be there · `offset` to continue |
+| `web_image_search` | Finds images: the address of the FILE and, separately, of the page it sits on | `query` | `max_results`, `page` |
+| `web_screenshot` | A PNG of a page **plus its text from the same visit**, so the two can be cross-checked | `url` | `max_chars` for how much text · `full_page` · `expect` |
+| `web_deep_search` | Composes its own queries, reads in waves, and answers from several sources — saying what it could not confirm | `question` | `waves` |
 
-## Where to go next
-
-* **[HOWTO-CALL.md](HOWTO-CALL.md)** — how to call it and, more importantly, how
-  to read what comes back. Start here.
-* **[ALGORITHM.md](ALGORITHM.md)** — what happens, step by step, when a request
-  arrives.
-* **[manifest.yaml](manifest.yaml)** — the machine-readable description.
-* **contracts/** — one contract per capability: what is promised, what is not,
-  and what the failure directions are.
-* **[measures/](measures/)** — the numbers: which engines are alive, what the
-  module withstands under load, what changing transport bought.
+Full argument reference, response shapes and failure modes: **[HOWTO-CALL.md](HOWTO-CALL.md)**.
 
 ## Install
 
@@ -48,285 +37,152 @@ cp .env.example .env
 echo "SEARXNG_SECRET=$(openssl rand -hex 32)" >> .env
 docker compose -f docker-compose.yml -f wiring/expose-localhost.yml up -d --build
 curl -s http://127.0.0.1:8081/healthz
-curl -s -X POST http://127.0.0.1:8081/mcp \
-     -H 'Content-Type: application/json' \
-     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
 The fourth line is not decoration. Without a value in `SEARXNG_SECRET` the very
-next command refuses — `required variable SEARXNG_SECRET is missing a value` —
-and that refusal is deliberate (see below). `openssl rand -hex 32` is one way to
-satisfy it; any long random string that is not taken from somebody's history
-will do.
+next command refuses — and that refusal is deliberate: with no key of its own the
+metasearch does not fail, it comes up with a publicly known one from its image
+template, silently.
 
-**`SEARXNG_SECRET` is mandatory and `up` refuses without it.** That is
-deliberate: with no key of its own the metasearch does not fail — it comes up
-with a publicly known one from its image template, silently.
+The overlay publishes the port **on loopback only**. A published container port
+does not go through the host firewall's usual chain, so exposing it more widely
+is a separate, deliberate step — see [Deployment](#deployment-and-exposure).
 
-**A model key is NOT mandatory.** Search, image search and screenshots never
-call a model; reading calls one on a single branch — a PDF with no text layer,
-which has to be recognised. Without a key that branch and deep search declare
-themselves unconfigured and name the missing variable rather than returning a
-quiet nothing.
+### Two transports
 
-**The protocol is OpenAI-compatible, and it is verified on GLM.** Providers
-differ in details beyond the common part, so the differences are carried in
-variables rather than in code — `LLM_API_BASE`, the two model names, and
-`LLM_DISABLE_THINKING`. If your provider refuses a request, look there first: the
-dialect field is not sent by default precisely because a strict provider answers
-`400` to it.
+MCP has two, and they answer different questions. **HTTP** — the commands above —
+is for a server that is already running somewhere. **stdio** is the protocol's
+default: the client starts the server as a process and talks to it through the
+pipes, which is how most desktop clients and wrappers work.
 
-**Set `LLM_API_BASE` in full, and verify it.** The obvious guess at a provider's
-address can answer `429: Insufficient balance` because the subscription lives on
-a different path of the same domain. The module behaves correctly — it returns
-the provider's answer verbatim — but from outside that reads as a broken product.
-Take the address from your provider's documentation, not by analogy.
+```bash
+python adapter/server.py --stdio        # or MCP_TRANSPORT=stdio
+```
 
-**`--build` is in the command on purpose.** The services carry both `build:` and
-`image:`; with an image of the same tag already present, compose reuses it and
-builds nothing. On a clean machine there is no image, but the flag keeps an
-update from raising yesterday's build.
+One JSON-RPC object per line in, one answer per line out. The mode is chosen
+explicitly and never guessed from whether a terminal is attached — that sign
+merely sits next to the subject, and one day it answers for a case nobody meant.
 
-The overlay publishes the port **on loopback only**, and it is the only
-publishing overlay that ships. Publishing more widely is two lines of your own,
-and the checks to run before them are listed in
-`wiring/expose-localhost.yml` — a published container port does not go through
-the host firewall's usual chain, so an empty `DOCKER-USER` means the firewall
-does not apply to it at all while still reporting that it does.
+In stdio mode **stdout is the protocol**: answers and nothing else, with the log
+on stderr. One stray line of anything else breaks the client reading it.
 
-## Cost, and the knobs that control it
+The sidecars do not depend on the choice. Started by a client with no compose
+project around it, the module still works and names what is missing instead of
+pretending: the browser path reports `not_wired_up`, and the engine pool comes
+back as `pool_source: seed`.
 
-**Three capabilities out of five never call a model.** Search, image search and
-screenshots are HTTP requests: they spend no tokens at all. Reading spends tokens
-on ONE branch — a PDF with no text layer, recognised by a vision model — and is
-free on every other. The fifth, `web_deep_search`, always calls a model. Without
-a key the two model-dependent paths declare themselves unconfigured rather than
-failing.
+## Configuration
 
-That is the difference from a search built into a model. A built-in tool has no
-knobs: it always works in one mode, always returns its own volume of text into
-the context, and that text is always paid for in tokens.
+| Variable | Required | What it is |
+|---|---|---|
+| `SEARXNG_SECRET` | **yes** | Session key for the metasearch. Any long random string that is not from somebody's history. |
+| `LLM_API_KEY` | no | Key for any OpenAI-compatible endpoint. **Secret.** |
+| `LLM_API_BASE` | no | Base URL of that endpoint. Take it from your provider's documentation, not by analogy — the obvious guess can answer `429: Insufficient balance` because the subscription lives on a different path of the same domain. |
+| `LLM_MODEL_TEXT` | no | Model that plans queries and composes answers. No default is shipped: a default would silently ask your provider for a model it may not have. |
+| `LLM_MODEL_VISION` | no | Model that reads scanned PDFs. Unset, such documents return an explicit refusal naming the reason. |
+| `LLM_DISABLE_THINKING` | no | Set for providers whose reasoning budget swallows the answer, leaving it empty with `finish_reason: length`. |
+| `READ_CONTACT` | no | Contact placed in the `User-Agent` when fetching pages. Defaults to this repository; set your own if you run this at scale. |
+| `READ_LANGUAGES` | no | `Accept-Language` when reading. Unset by default — the language of the pages you read is not ours to choose. |
 
-Here the volume is an argument. One and the same query, measured on one machine:
+Pacing, pool size and read limits have their own variables with measured
+defaults; see [`.env.example`](.env.example), which explains each one where you
+set it.
 
-| call | returned | time | model calls |
+**A model key is optional.** Search, reading, image search and screenshots are
+HTTP requests and spend no model tokens. A model is called in exactly two places,
+and both are named in the answer: `web_deep_search`, and recognising a PDF with no
+text layer — which happens only when you ask to read such a document, never behind
+your back in a search.
+
+## What this does that a bundled search tool does not
+
+**Cost you control.** One argument changes the answer by an order of magnitude:
+
+| call | payload | time | model tokens |
 |---|---|---|---|
-| `read: false`, `max_results: 6` | 3 844 characters | 0.6 s | 0 |
-| `read_top: 1`, `max_results: 3` | 8 833 characters | 1.6 s | 0 |
-| `read_top: 3`, `max_results: 6` | 9 805 characters | 6.3 s | 0 |
-| `web_deep_search` | a full digest | 36 s | 6 |
+| `read: false`, 6 links | 3.8 KB | 0.6 s | **0** |
+| `read_top: 1`, 3 links | 8.8 KB | 1.6 s | **0** |
+| `read_top: 3`, 6 links | 9.8 KB | 6.3 s | **0** |
+| `web_deep_search` | full account | 36 s | 6 calls |
 
-A single argument moves the volume by an order of magnitude and the time by a
-factor of sixty. The knobs are `read`, `read_top`, `max_results`, `min_engines`
-and `per_engine`; `min_engines` is the one that buys independence and the one
-that multiplies outbound requests proportionally.
+*Measured on one machine, one query. Take the shape, not the digits.*
 
-*(One machine, one query. Take the shape, not the digits.)*
+**The engine list maintains itself.** A hand-written list goes stale in silence:
+an engine that was the best returns nothing weeks later and says nothing about it.
+Ours was revised three times in a single day — each revision against the previous
+one, each correct on its own data. The problem was never the engines: a decision
+freezes while observation goes on.
 
-**And the honest other half.** On a well-covered question the module is SLOWER
-than a search built into a model and returns the same answer. Measured on a
-question about a large company's annual revenue: 36 seconds for a deep search
-against seconds for a built-in one, and the same figure in both.
+So the list is not written here. A prober asks every known engine, continuously,
+with questions whose correct answer is known in advance, and the pool is the best
+few by reference hit share — recomputed on its own. Verified by falsification: a
+planted bad run took an engine out of the pool **with no code change**, and
+restoring the run brought it back by itself.
 
-The gain begins where the answer is not on the surface, or where you need to know
-what to trust: which engine found a link, whether the sources agree, whether the
-page was a page or an anti-bot wall, whether one name covers several different
-subjects. A built-in search answers the question; this one also answers how much
-the answer is worth.
+Until enough observation accumulates, the pool is a seed list and every answer
+says so in `pool_source`.
 
-## What it is made of
-
-**A metasearch container** — somebody else's open service. It holds the result
-parsers for dozens of engines, maintained by their community rather than by us.
-That is exactly why it is here: our own parsers would need repairing after every
-redesign somebody else ships.
-
-**The adapter** — our process, and the module proper: from outside, only this is
-visible. It holds the doors over ONE implementation of each capability — MCP for
-tool clients, plain HTTP contracts, a health check for orchestration, and the
-observation views `/engines` and `/pages`. A second implementation "for another
-protocol" would diverge from the first at the first edit.
-
-**The reader** — part of the adapter, in a file of its own, because the reading
-policy (per-domain pacing, stub rejection, the chunked cursor) belongs beside the
-measurements that explain it. HTML is parsed on the standard library: the price
-is named honestly — tables come out as lines rather than tables — and in exchange
-there is one less library to update on the path where every outside page arrives.
-PDFs are another matter: a stdlib parser was written, measured and rejected, so
-the image carries four libraries and 419 MB, each argued for in
-`adapter/Dockerfile`.
-
-**The prober** — our process. Continuously, one engine at a time, it asks every
-engine the metasearch knows and writes a verdict to a database. It exists because
-the set of living engines changes within hours, and a point measurement cannot
-see that: an engine that was the best of the set returns nothing weeks later
-without saying a word about it.
-
-The same prober measures **reading references** — nine pages whose content is
-known in advance, each covering its own defect class. Two of them are
-**negative**: addresses that certainly do not exist, from which the expected
-verdict is `stub`. Without them the shield detector would degrade unnoticed,
-because it always says `clean`.
-
-## How engines are chosen
-
-**One engine at a time, not a fan-out.** The order is fixed; we walk it top down
-and stop as soon as there is enough. If an engine refuses, the next one goes —
-switching is not a separate mechanism but a property of the order. A fan-out
-costs several times the requests to other people's services and brings a block
-closer, while adding almost nothing on an ordinary query: different engines
-overlap heavily on the same question.
-
-**At most one request per engine per interval.** The metasearch has no rate
-regulator at all, so the module holds one. An engine that may not be asked right
-now is skipped rather than waited for. If nobody may be asked, the answer is a
-refusal with a reason — "we asked nobody" must be distinguishable from "nothing
-was found".
-
-**The pool is COMPUTED from observation, not written by hand.** This is the main
-rule here. A hand-written list of engines needs revising as often as the engines
-change — three times in one day is not unusual, each revision against the
-previous one and each correct on the data available. The problem is neither the
-engines nor the quality of the decisions: a decision freezes while observation
-goes on.
-
-So the pool is the best-N by reference hit share, recomputed continuously.
-**No entry threshold, no exit threshold, no floor**: a threshold is a number
-somebody assigns which then freezes — the same disease in another place. The pool
-cannot empty out by construction, because it is always full.
-
-Two limiters remain, and both are about noise rather than quality: an engine with
-two lucky probes does not displace one proven over a hundred and twenty, and a
-swap happens only when a candidate is clearly better — otherwise the pool would
-twitch on hundredths.
-
-**When there is not enough to compute from, the pool is not invented.** The
-starting list — the seed — is returned instead, and the answer says so:
-`pool_source: seed` with the reason in words, against `computed`. A fresh install
-and an install whose observations were lost look identical from outside unless
-this is said out loud. The image pool runs on its seed to this day: its
-references have not been written yet.
-
-**One family takes at most two slots.** A family is a set of engines sharing an
-index; families are computed too, not declared. Without the cap the pool fills
-with shopfronts of a single source: excellent by share, and not one independent
-witness among them. A cap rather than a ban — quality comes first, diversity is
-the limiter.
-
-**Leaving and returning happen by themselves.** Verified by falsification: a
-planted bad run takes an engine out of the pool with no code change, and
-restoring the run brings it back. The snapshot must name who displaced whom and
-WHY — by share or by the family cap — because an engine can leave with an
-excellent share, and without the reason beside it that reads as a broken
-mechanism.
-
-**An engine disabled in the metasearch settings still answers** when named
-explicitly. The `disabled` flag is shown beside the hit share as a reason to
-look, never as grounds to exclude: dozens of engines ship disabled, including
-ones that score 0.98 here. Only observation excludes.
-
-**An unknown name is never sent.** The metasearch does not answer an unknown
-engine name with an error — it silently queries the whole category, dozens of
-engines instead of one, and nothing in the answer shows it. So names are checked
-against its own registry before sending.
-
-**An engine with no index of its own is not worth adding.** Many public "search
-engines" are shopfronts over two or three indexes. Adding them adds NAMES, not
-sources: measured, one such shopfront had 95-100% of its links inside another
-engine's index. A shopfront inflates the witness count without adding
-independence, and does it invisibly — the answer carries different names and
-`corroborated_by_url` grows an honest-looking number.
-
-## Telling a bad result set from a good one
-
-An engine fails in **four** ways, and three of them give no sign. All four are
-visible in the answer, empty lists included — an empty list is information too.
+**Failure is distinguishable from success.** Four ways an engine can fail, and
+what shows each:
 
 | how it fails | what shows it |
 |---|---|
 | answers with a refusal: captcha, rate limit, ban | `unresponsive_engines` |
 | silently returns nothing | the difference between `engines_asked` and `engines_answered` |
 | answers a different question | `engines_irrelevant` — its results are already discarded |
-| answers THE question about ANOTHER subject | `engines_trust` |
+| substitutes the subject with a better-indexed namesake | `engines_trust`, earned against references |
 
-The last is the most dangerous and the least visible. The results look real: live
-links, the query words present, texts on topic. It is simply a different company
-of the same name, or a different "official site". A check against the words of
-the query passes it every time — the words did match.
+The same applies to reading: seven distinct outcomes, and a page that returned a
+shield is `stub`, not empty text.
 
-**It is caught by a reference** — a query whose correct answer is known in
-advance and confirmed outside the engines. The prober runs the references in a
-loop, and by hitting them an engine earns a label: `clean`, `candidate`,
-`substitutes`, `unavailable`, `not_checked`. The label travels in every answer,
-because it changes what a consumer should do.
+## How it works
 
-**The label has a chosen failure direction.** No data means `not_checked`, never
-`clean`: a broken observation switches verification ON at the consumer, not off.
-
-## Telling a page that was read from a shield
-
-Reading has the same defect class as search, and a nastier one: **the page
-arrives, there is text in it, and a single answer does not show that the text is
-an anti-bot page rather than content.** Of 141 HTML pages taken from our own
-results, 40 — one in four — returned fewer than 1200 characters, and ALL FORTY
-were a block, a JS application or an error. Not one real page.
-
-The four obvious signals were measured and all four lie: the status code (a
-non-existent page answers 200 five times out of six), the title (it echoes the
-request), the canonical link (an error page declares itself the address sought),
-and the length (a legitimate page of 167 characters against a stub of 2990).
-
-So **the reference attribute for reading is a marker in the text**: knowledge of
-what specifically must be on the page. A caller sets it per call with `expect`;
-the prober measures it continuously against its references, and `/pages` shows
-whether each fetch path is alive.
-
-Reading has **seven outcomes**, separated by what to do next: retrying is
-pointless on `empty` and sensible on `refused`; `not_reached` is news about us,
-`refused` is news about them. The full table is in
-[HOWTO-CALL.md](HOWTO-CALL.md).
+- **[ALGORITHM.md](ALGORITHM.md)** — what happens, step by step, on each call.
+- **[contracts/](contracts/)** — the call contracts, versioned separately from
+  the code that implements them.
+- **[measures/](measures/)** — dated measurements: which engines were alive, what
+  the load ladder gives, what the transport change bought. Numbers, with what was
+  measured and when.
 
 ## Deployment and exposure
 
-A compose project of its own, self-contained: it creates its own network and
-depends on nothing external.
+`wiring/expose-localhost.yml` publishes the adapter on `127.0.0.1` only. Anything
+wider is a separate overlay, and its header says what to check first: Docker
+passes traffic to published ports through `FORWARD` after DNAT, while the
+firewall's own chain sits before its hooks — so a firewall that says "closed" can
+be open to the internet on a published port.
 
-Only the adapter is ever exposed, and only together with a firewall rule limiting
-the source. The metasearch stays internal: reachable from outside, it becomes an
-open proxy that goes to the network in the machine owner's name.
-
-**A published container port is NOT protected by the host firewall's usual
-rules** — that traffic bypasses them. It needs an explicit rule in the chain that
-container traffic passes through; without one the port is open to everyone while
-the firewall keeps reporting otherwise. The command to check this is in the
-exposing overlay.
-
-## Secret
-
-The metasearch signing key comes from the environment; it is not in the
-repository. The requirement is enforced by the compose file rather than by the
-metasearch, which without the variable does not fail but comes up with a publicly
-known key from its image template. A "fix" consisting only of removing the secret
-from a file would therefore produce a system that is worse than before and looks
-repaired.
+A search server open to the outside is an open proxy that goes to the network in
+the machine owner's name.
 
 ## Tests
 
-Three suites ship: the protocol and search against a fake metasearch, reading
-against a fake site, and the computed pool against a database built in memory.
-
 ```bash
-IMAGE=ag-mod-search/adapter:1 bash tests/in-image.sh
+IMAGE=ag-mod-search/adapter:0.2.1 bash tests/in-image.sh
 ```
 
-**Not one of them makes a single outbound request.** For reading that matters
-more than for search: a test that went to the internet would spend the very
-resource the tool protects — the reputation of the single address it calls from.
+Three suites — the protocol and search against a fake metasearch, reading against
+a fake site, the computed pool against a database built in memory. **Not one of
+them makes a single outbound request**: for reading that matters more than for
+search, because a test that went to the internet would spend the very resource
+the tool protects — the reputation of the one address it calls from.
 
-They run **inside the module image**, not on the machine where the code is
+They run inside the built image rather than on the machine where the code is
 edited: the PDF parser lives in the image, and a suite run outside would skip
-everything that touches it. The skip would not be silent — the PDF check goes red
-with a note saying where to run it — but a green run that checked nothing is
-exactly the defect these tests look for.
+everything that touches it. The skip is not silent — the check goes red with a
+note saying where to run it.
 
-What these suites cannot check is in [tests/README.md](tests/README.md).
+What these suites cannot check is written down in
+[tests/README.md](tests/README.md).
+
+## Contributing
+
+A capability, engine or heuristic is not accepted until its **reference
+attribute** is declared — a property of the correct answer that the thing being
+tested could not have told us itself — and a pool of checked questions is
+attached. See [CONTRIBUTING](https://github.com/AG-Bureau/.github/blob/main/CONTRIBUTING.md).
+
+## License
+
+[Functional Source License 1.1, ALv2 future](LICENSE) — free for your own use;
+permission required to monetise. Converts to Apache 2.0 two years after release.

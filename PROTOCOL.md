@@ -114,6 +114,16 @@ with `#` and there were `--`. The same applies to any embedded language — yaml
 a string, a shell fragment, a query. A guard must know which languages it has
 nested inside it, or it honestly reports zero over text it cannot see.
 
+**AN INSTALLATION INSTRUCTION CANNOT BE CHECKED BY ANYONE WHO HAS ALREADY
+INSTALLED.** They perform the missing steps by reflex and never notice the
+absence. A published `## Install` began at `cp .env.example .env` — no clone, no
+`cd`: written from inside a directory the reader does not have. The instruction
+was reviewed twice and passed both times, because both reviewers had cloned by
+hand BEFORE opening it. The reader's first action is an open repository page, and
+the check starts there: from the first action of the reader, not from a directory
+on disk. The same principle as checking from where the consumer calls, applied to
+text.
+
 ## Where to look, and from where
 
 **Check FROM WHERE THE CONSUMER CALLS FROM. A probe physically incapable of

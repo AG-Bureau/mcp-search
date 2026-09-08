@@ -12,7 +12,7 @@
 # checked nothing — exactly the defect these tests look for.
 set -u
 MOD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE="${IMAGE:-ag-mod-search/adapter:1}"
+IMAGE="${IMAGE:-ag-mod-search/adapter:0.2.1}"
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   echo "no image $IMAGE — building it"

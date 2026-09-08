@@ -147,6 +147,13 @@ def main() -> int:
     check("initialize returns the protocol version and the server name",
              r["result"]["protocolVersion"] == server.PROTOCOL
              and r["result"]["serverInfo"]["name"] == "ag-mod-search", r)
+    # ONE VERSION, TOLD THE SAME WAY TO EVERYONE WHO ASKS. The handshake and the
+    # `User-Agent` a site administrator reads in their log must name the same
+    # release; two literals would drift apart with nothing reporting it.
+    check("the handshake names the module's real version, not an internal number",
+             r["result"]["serverInfo"]["version"] == reader.VERSION
+             and reader.VERSION in reader.HTTP_HEADERS["User-Agent"],
+             (r["result"]["serverInfo"]["version"], reader.HTTP_HEADERS["User-Agent"]))
     code, r = post({"jsonrpc": "2.0", "method": "notifications/initialized"})
     check("a notification has no answer (202, empty body)", code == 202 and r is None, code)
     _, r = post({"jsonrpc": "2.0", "id": 2, "method": "ping"})
@@ -795,6 +802,17 @@ def main() -> int:
             break
     check("the deployment file is available to the test (otherwise the tick check is a sham)",
              bool(pool_state), compose_paths)
+    # THE IMAGE TAG IS THE RELEASE, AND IT IS THE SAME RELEASE THE MODULE NAMES
+    # IN ITS HANDSHAKE. Two literals about one version drift apart in silence, and
+    # the drift shows up in the worst place: `up -d` without `--build` on a clean
+    # machine sends compose to PULL a tag that no registry has, and its refusal
+    # talks about a registry rather than about the missing build.
+    tags = sorted(set(_re.findall(r"^\s*image:\s*ag-mod-search/adapter:(\S+)",
+                                  pool_state, _re.M)))
+    check("every adapter image in the deployment file carries ONE tag",
+             len(tags) == 1, tags)
+    check("and that tag is the version the module reports in its handshake",
+             tags == [reader.VERSION], (tags, reader.VERSION))
     intervals = [float(mm) for mm in _re.findall(r"^\s*interval:\s*(\d+)s",
                                            pool_state, _re.M)]
     seconds = max(intervals) if intervals else 30.0
@@ -1536,6 +1554,59 @@ def main() -> int:
                  "https://example.com/p?url=https%3A%2F%2Fexample.com%2Fx"))
     check("an ordinary address is left alone",
              server._unwrap_redirect("https://normal.ru/x") == "https://normal.ru/x")
+
+    print("\n== the SECOND transport: MCP over stdio ==")
+    # STDIO IS THE PROTOCOL'S DEFAULT TRANSPORT, and its absence was invisible
+    # here because our only consumer speaks HTTP. A desktop client starts the
+    # server as a PROCESS: no stdio, no client.
+    #
+    # THE CHECK RUNS A REAL PROCESS rather than calling `_stdio()` in-process, and
+    # that is the whole point. What breaks this mode is a stray print landing in
+    # the middle of the conversation — and a print is only visible as a defect
+    # when there is a real stdout to land in. In-process the substitution of
+    # sys.stdout would be checked against itself.
+    import subprocess
+    talk = "\n".join([
+        json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                               "clientInfo": {"name": "p", "version": "1"}}}),
+        json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+        # A CALL THAT PRINTS. The search path writes diagnostics about the engine
+        # registry and the trust database; with no metasearch here it certainly
+        # prints. That is exactly the line that must NOT reach stdout.
+        json.dumps({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                    "params": {"name": "web_search",
+                               "arguments": {"query": QUERY, "max_results": 1}}}),
+        "this line is not json",
+    ]) + "\n"
+    run = subprocess.run([sys.executable, os.path.join(os.path.dirname(server.__file__),
+                                                       "server.py"), "--stdio"],
+                         input=talk, capture_output=True, text=True, timeout=120,
+                         env={**os.environ, "SEARXNG_URL": "http://127.0.0.1:9"})
+    lines = [l for l in run.stdout.splitlines() if l.strip()]
+    parsed, junk = [], []
+    for l in lines:
+        try:
+            parsed.append(json.loads(l))
+        except Exception:  # noqa: BLE001
+            junk.append(l)
+    check("stdout carries JSON AND NOTHING ELSE — one stray print breaks a client",
+             junk == [], junk[:2])
+    check("a notification gets no line back: four messages in, four answers out",
+             [d.get("id") for d in parsed] == [1, 2, 3, None],
+             [d.get("id") for d in parsed])
+    check("initialize declares the protocol over stdio too",
+             parsed and parsed[0]["result"]["protocolVersion"] == server.PROTOCOL,
+             parsed[0] if parsed else None)
+    check("the five tools are listed over stdio",
+             len(parsed[1]["result"]["tools"]) == 5, len(parsed[1]["result"]["tools"]))
+    check("a broken line is ANSWERED, not swallowed into silence",
+             parsed[-1]["error"]["code"] == -32700, parsed[-1])
+    # THE DIAGNOSTICS DID NOT VANISH — they moved. A mode that silences the log
+    # would trade one blindness for another.
+    check("what used to go to stdout is now on stderr, not lost",
+             "ag-mod-search" in run.stderr, run.stderr[:80])
 
     print("\n== the ok field is uniform across the contracts ==")
     # NEIGHBOURING TOOLS THAT CALL THE SAME THING BY DIFFERENT NAMES are a future

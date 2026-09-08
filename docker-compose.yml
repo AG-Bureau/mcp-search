@@ -90,7 +90,13 @@ services:
       driver: json-file
       options: {max-size: "10m", max-file: "3"}
     build: ./adapter
-    image: ag-mod-search/adapter:1
+    # THE TAG IS THE RELEASE, NOT AN INTERNAL COUNTER. `:1` matched no release of
+    # anything: on a clean machine `up -d` WITHOUT `--build` sends compose to pull
+    # a tag that exists in no registry, and the refusal names a registry rather
+    # than the missing build. A test holds this equal to the version the module
+    # reports in its handshake — two truths about one release drift apart in
+    # silence, and this is the pair most likely to.
+    image: ag-mod-search/adapter:0.2.1
     restart: unless-stopped
     environment:
       SEARXNG_URL: http://searxng:8080
@@ -252,7 +258,10 @@ services:
     logging:
       driver: json-file
       options: {max-size: "10m", max-file: "3"}
-    image: ag-mod-search/adapter:1
+    # The SAME image as the adapter, by the same tag: the prober imports
+    # reader.py from it. A tag of its own here would let the two drift a version
+    # apart with nothing reporting it.
+    image: ag-mod-search/adapter:0.2.1
     restart: unless-stopped
     depends_on:
       searxng:
