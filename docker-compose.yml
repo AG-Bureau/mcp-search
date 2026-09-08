@@ -1,0 +1,339 @@
+# ag-mod-search — the deployment of the search module.
+#
+# A compose project of its own: the module is tuned and restarted without touching
+# anybody else's deployment trees.
+#
+#     docker compose -p ag-mod-search up -d
+#
+# The file is SELF-CONTAINED: it creates its own network and depends on nothing
+# external, so it comes up on a machine of its own. Requiring somebody else's
+# networks would make it work ONLY beside them.
+#
+# TWO INSTANCES ON ONE MACHINE NEED DIFFERENT PROJECT NAMES. The volumes carry
+# the project name, so a second instance gets its own; the network is named
+# below and follows the same substitution for the same reason. And a second
+# container answering to the alias `searxng` on a shared network would be
+# reached instead of ours — the alias comes from the service name, not from the
+# project.
+name: ag-mod-search
+
+services:
+  # The service name is exactly `searxng` and must not be changed: consumers use
+  # SEARXNG_URL=http://searxng:8080, that is, the network alias compose derives
+  # from the service name. While the name stays, moving the module into a project
+  # of its own requires no change in any consumer's environment.
+  searxng:
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+    # Pinned by digest rather than by a moving tag: `latest` runs ahead silently.
+    #
+    # This build is chosen for its TRANSPORT. An ordinary http client leaves a
+    # recognisably non-browser fingerprint: no Sec-Fetch-* headers, Accept sent as
+    # */*, while Cache-Control and DNT go out, which browsers do not send at all —
+    # all this while presenting as a browser that has sent Sec-Fetch-* since
+    # version 90. A self-contradiction checkable in one line on the anti-bot side.
+    # Shuffling ciphers, the only defence of the older build, confuses JA3 and does
+    # not touch JA4.
+    #
+    # This build uses curl_cffi with Chrome impersonation, enabled BY DEFAULT
+    # (DEFAULT_IMPERSONATE = "chrome") — a real browser fingerprint with no setting
+    # changed. That is an order of magnitude cheaper than a headless browser:
+    # no second runtime and no parsers of our own.
+    #
+    # What it does NOT promise: engines that refuse on address reputation without
+    # any test at all are not cured by a fingerprint. Check by measurement, not by
+    # faith.
+    image: searxng/searxng@sha256:1b4ea908e44f57f7e7b7b4a0952c24c7bda139c1e0beff2409e6004435c7d104
+    restart: unless-stopped
+    environment:
+      SEARXNG_BASE_URL: http://searxng:8080/
+      # The limiter is meant for a public instance facing bots; here the clients
+      # are our own containers, and it only gets in the way.
+      SEARXNG_LIMITER: "false"
+      # THE ONLY place the secret lives is the .env file beside this compose file
+      # (it is not in git, see .gitignore; the sample is .env.example).
+      #
+      # The `:?` form is not decoration. With the variable absent the metasearch
+      # does NOT fail — it comes up with the publicly known key from its own
+      # settings template, silently. It has no defence of its own against that, so
+      # compose holds the check: `up` and `config` refuse until the variable is set.
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?SEARXNG_SECRET is not set — without it the metasearch would silently come up with the publicly known ultrasecretkey from its image template}
+    volumes:
+      # A file, not a directory, and FROM THE REPOSITORY: the engine set is a
+      # decision with an argument behind it (the measurement lives inside the
+      # file), and it must live in history rather than on a disk that the first
+      # rebuild of the machine wipes.
+      # The /etc/searxng directory stays inside the container and writable — the
+      # image needs to generate its own files there.
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    healthcheck:
+      # The metasearch has its own /healthz. wget is present in the image; curl is
+      # not.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # The adapter: the same capability, but as a MODULE rather than as somebody
+  # else's sidecar. Search has to work over MCP and the metasearch does not speak
+  # MCP, so the transport lives here. The engine-selection policy moves here as
+  # well, instead of sitting in a consumer and duplicating settings.yml (see
+  # contracts/ag.search.v1.md).
+  #
+  # The metasearch itself is NOT changed and stays reachable directly: an existing
+  # consumer talks to it over SEARXNG_URL and knows nothing about the adapter.
+  # Adding this service breaks nothing — it adds.
+  ag-search:
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+    build: ./adapter
+    image: ag-mod-search/adapter:1
+    restart: unless-stopped
+    environment:
+      SEARXNG_URL: http://searxng:8080
+      PROBE_DB: /data/engines.db
+      # The browser path. Empty means the path is honestly declared not wired up;
+      # an address set while the sidecar stays silent is reported as such, not
+      # passed off as health.
+      BROWSER_WS_URL: ws://browser:3000/
+      # MODELS. The names live in variables rather than in code: a change costs
+      # one line here.
+      #
+      # THE CHOICE OF A VISION MODEL IS A TRADE, AND THE TRADE IS MEASURED. On a
+      # scanned catalogue, a fast vision model and a heavier one both recovered
+      # every article number, while the fast one lost a digit in figures (47.4
+      # against 47.48, 46.22 against 46.32 — confirmed by INDEPENDENT recognition
+      # rather than by comparing the models with each other) and was three times
+      # faster (6.2 s against 16.2). Speed against precision in numbers; for
+      # equipment specifications that matters, and switching back costs one line.
+      #
+      # THE MODEL NAMES AND THE BASE URL COME FROM .env, NOT FROM THE IMAGE. The
+      # public version of the module is installed on somebody else's server with
+      # somebody else's key, and a hard-wired name would silently go asking for a
+      # model that provider does not have.
+      LLM_MODEL_TEXT: ${LLM_MODEL_TEXT:-}
+      # Vision is asked about SEPARATELY: not every provider has a model that can
+      # look. Unset, scan recognition refuses honestly with a reason rather than
+      # calling the text model with a picture.
+      LLM_MODEL_VISION: ${LLM_MODEL_VISION:-}
+      # THE MODEL KEY OF ANY PROVIDER speaking the OpenAI-compatible protocol.
+      # Without it deep search and scan recognition stay silent — honestly, with
+      # the reason named, but silent.
+      #
+      # WITHOUT `:?`, unlike the metasearch secret, and that is a different case
+      # rather than carelessness. There an absent variable brought the service up
+      # with a publicly known key — silently breaking a defence — so `up` must
+      # refuse. Here an absent key breaks nothing: search and reading work, and the
+      # model-backed capabilities declare themselves unavailable by the name of the
+      # variable. Demanding the key at `up` would take the whole module down over
+      # two capabilities out of five.
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      # The provider's API base URL. No default: one provider's address silently
+      # substituted under another provider's key gives a refusal that reads as a
+      # breakage.
+      LLM_API_BASE: ${LLM_API_BASE:-}
+      # Prices, if the caller knows the provider's tariffs. Empty leaves cost_usd
+      # at null, and that is the right answer rather than an omission.
+      LLM_PRICE_INPUT_PER_1K: ${LLM_PRICE_INPUT_PER_1K:-}
+      LLM_PRICE_OUTPUT_PER_1K: ${LLM_PRICE_OUTPUT_PER_1K:-}
+      # A DIALECT FIELD, OFF BY DEFAULT. `thinking: {type: disabled}` is not part
+      # of the OpenAI protocol and a strict provider answers 400 to it; a provider
+      # that reasons by default spends ten times the output tokens without it. The
+      # variable must reach the container, or the knob exists only in the code.
+      LLM_DISABLE_THINKING: ${LLM_DISABLE_THINKING:-}
+      # HOW WE INTRODUCE OURSELVES TO SOMEBODY ELSE'S SITE. Unset, the User-Agent
+      # names the repository — the code doing the walking. An operator answering
+      # for this traffic puts their own address here.
+      READ_CONTACT: ${READ_CONTACT:-}
+      # Accept-Language for reading. Unset by default: a language chosen here
+      # decides what the web answers, on behalf of whoever runs this. For
+      # Russian-language reading: READ_LANGUAGES=ru-RU,ru;q=0.9,en;q=0.8
+      READ_LANGUAGES: ${READ_LANGUAGES:-}
+      # THE SPEND LEDGER. One line per model call: the model name and the tokens,
+      # with no money — the price registry is single for the whole system, and a
+      # second place knowing the tariffs would diverge from the first at the first
+      # edit.
+      #
+      # On a volume of its own rather than beside the prober database: that one is
+      # mounted read-only DELIBERATELY (the prober writes to it), so the ledger
+      # cannot live there.
+      SPEND_LEDGER: /spend/model-calls.jsonl
+    volumes:
+      # The prober database, read-only: the prober writes to it, the adapter only
+      # displays it. The split of rights is not a formality but protection against
+      # an error in serving the state corrupting the measurements themselves.
+      - probe-db:/data:ro
+      # The only place the adapter WRITES to. A volume of its own rather than a
+      # file on the host: a volume survives the container being recreated, and
+      # accounting that resets on restart is not accounting.
+      - spend:/spend
+    depends_on:
+      searxng:
+        condition: service_healthy
+      # We wait for the browser to be healthy: otherwise the first mode=browser
+      # calls would answer "not responding", and that would look like a broken path
+      # rather than a start-up.
+      browser:
+        condition: service_healthy
+    healthcheck:
+      # The adapter's /healthz goes to the metasearch instead of answering "ok, I
+      # am alive": health answers for the CAPABILITY, otherwise it lies exactly
+      # when it matters. The deep check (?deep=1) performs a real search and is
+      # deliberately NOT used here — it would pay with an outbound request on every
+      # interval.
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8081/healthz',timeout=5).status==200 else 1)"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 10s
+
+  # The browser sidecar. Our own, not a bridge to somebody else's: a build
+  # system's browser checks the layout of its own builds, ours reads other
+  # people's pages; the machines differ, and docker networks do not stretch
+  # between hosts.
+  #
+  # No port is published: only the adapter talks to the sidecar, from inside the
+  # project network. A published playwright protocol is remote control of a
+  # browser in our name.
+  browser:
+    build: ./browser
+    image: ag-mod-search/browser:1.49.1
+    restart: unless-stopped
+    # Memory, measured: 40 MB idle, +7 MB per page, 321 MB over nine consecutive
+    # pages. The ceiling is set at twice the measured peak: hitting it means a leak
+    # rather than load, and it is better to learn that by a container restart than
+    # by the neighbours on the machine being killed.
+    mem_limit: 700m
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import socket,sys; s=socket.create_connection(('127.0.0.1',3000),3); s.close()"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 20s
+
+    # A HARD LIMIT ON WRITING TO DISK. Left unbounded, this sidecar wrote 44 GB
+    # into its own layer within half a day and filled the machine's disk COMPLETELY
+    # (`No space left on device` while copying a 142-byte file). The only
+    # observable sign was one health check failing with "Resource temporarily
+    # unavailable" — that is, the machine was dying silently.
+    #
+    # Chromium is what writes: profiles, caches, crash dumps. It has no limit of
+    # its own, and a container's write layer grows to the end of the disk. tmpfs
+    # gives a HARD limit: an overflow becomes a write error inside the browser — an
+    # event that is visible — instead of a dead machine.
+    #
+    # The size is deliberately modest: tmpfs pages count against the container's
+    # memory, and its mem_limit is 700m. Larger, and a disk limit is traded for an
+    # OOM.
+    tmpfs:
+      - /tmp:size=256m
+      - /home/pwuser:size=64m
+    logging:
+      # The second silent eater of disk is the logs. Without a limit json-file
+      # grows without end.
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+  # The prober: every 10 seconds it asks ONE engine, round-robin, and writes a
+  # verdict to the database. It closes the weakness of point measurements: a pool
+  # goes stale silently — an engine that was the best of the set returned zero
+  # three weeks later and said nothing about it.
+  #
+  # The load on the engines is NEGLIGIBLE, and that is the point: with 60 engines a
+  # full lap takes 10 minutes, so each engine sees one request from us per 10
+  # minutes. Asking them in a fan-out is not allowed — that is exactly what gets us
+  # blocked.
+  prober:
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+    image: ag-mod-search/adapter:1
+    restart: unless-stopped
+    depends_on:
+      searxng:
+        condition: service_healthy
+      # We wait for the adapter to be healthy: read probes go through its door,
+      # and without it the first ticks would go red with "the door did not answer"
+      # — true, but about the start-up rather than about the references.
+      ag-search:
+        condition: service_healthy
+    environment:
+      SEARXNG_URL: http://searxng:8080
+      PROBE_INTERVAL_S: "10"
+      PROBE_DB: /data/engines.db
+      # THROUGH WHOSE HANDS A READ PROBE GOES. The prober calls the adapter's
+      # DOOR rather than its own copy of the reader: checking must happen from
+      # where the consumer calls from. Reading in its own process, the prober has
+      # no BROWSER_WS_URL either — so the browser reference can NEVER pass, while a
+      # snapshot shows "browser alive" (about the adapter) beside "path not wired
+      # up" (about the prober).
+      ADAPTER_URL: http://ag-search:8081
+      # How often the reference pages are read. The value is IN TICKS, not in
+      # minutes, and the lap depends on HOW MANY references there are: at
+      # PROBE_INTERVAL_S=10 with nine references, 72 ticks give one probe per page
+      # every 1.8 hours and some read every 12 minutes. The prober prints the real
+      # figure at start-up — read it there rather than recomputing from memory.
+      #
+      # The argument for a conservative first value is not caution: A BURNT
+      # REFERENCE DOES NOT COME BACK. One site was lost after some thirty requests
+      # within half an hour and still does not answer our address while answering
+      # another machine in 0.22 s. With five references, losing one is a fifth of
+      # the mechanism by which we judge reading at all.
+      #
+      # Meanwhile the observational value of 2.4 probes per hour over one is zero:
+      # the prober catches a BREAKAGE, and a breakage is equally visible at 24
+      # probes a day. When a rate is computed rather than observed, the first value
+      # is taken with a margin towards IRREVERSIBLE damage.
+      #
+      # After a day: look at each address separately (status code and time). If
+      # none has begun refusing, this can be raised — but recompute the lap for
+      # the CURRENT number of references first: the same value means different
+      # rates for five references and for nine.
+      READ_PROBE_EVERY: "72"
+    volumes:
+      # MIND THE ORDER OF DEPLOYMENT. probe.py arrives from the host by a mount
+      # while reader.py, which it imports, comes FROM THE IMAGE. So the file on the
+      # host can run ahead of the image and the prober will fail at import. Rebuild
+      # the image first (`docker compose build`), restart the prober second. The
+      # failure is loud and visible in the logs, which is better than silently
+      # skipped read probes — but best is not to create the skew at all.
+      - ./prober/probe.py:/app/probe.py:ro
+      - probe-db:/data
+    command: ["python", "/app/probe.py"]
+
+# NOT ONE port is published outward, and that is not a formality. Measured: the
+# DOCKER-USER chain is empty and sits in FORWARD BEFORE the firewall's own hooks,
+# so `docker -p` opens a port to the whole internet whatever the firewall status
+# says. A search engine reachable from outside is an open proxy that goes to the
+# network in our name. A port may be published only together with an explicit rule
+# in DOCKER-USER restricting the source.
+networks:
+  default:
+    # NAMED FROM THE PROJECT, like the volumes and for the same reason: a literal
+    # would put two instances of the module on one machine into ONE network,
+    # where the `searxng` alias resolves to whichever container came up first.
+    name: ${COMPOSE_PROJECT_NAME:-ag-mod-search}
+
+volumes:
+  # The engine-state database. It survives containers being recreated: the history
+  # of measurements is the whole reason the prober exists.
+  probe-db:
+    # THE NAME IS TIED TO THE PROJECT, NOT HARD-CODED. A hard-coded literal keeps
+    # the volume from being orphaned when the project is renamed — that argument is
+    # right and still holds. But on somebody else's machine a literal is dangerous:
+    # two instances of the module on one host would SILENTLY share the observation
+    # database, and `down -v` in one would destroy the other's data. The
+    # substitution gives both properties at once: our volume keeps its old name,
+    # and a second instance elsewhere gets its own.
+    name: ${COMPOSE_PROJECT_NAME:-ag-mod-search}-probe-db
+
+  # The model spend ledger. Its name is set the same way and for the same reason:
+  # orphaned, the volume would take the whole spend history with it, and we would
+  # notice by a zero in the view.
+  spend:
+    name: ${COMPOSE_PROJECT_NAME:-ag-mod-search}-spend

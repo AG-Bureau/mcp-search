@@ -1,0 +1,14 @@
+# THE FILE THAT KEEPS A SECRET OUT OF HISTORY, and it ships for exactly that
+# reason. Three documents here promise that the real .env is not in git; without
+# this file that promise is a lie of the worst kind — one that looks like
+# PERMISSION. A reader who believes "not in git" will not check, and the first
+# `git add -A` after `cp .env.example .env` puts the key into their history,
+# where it cannot be taken out.
+.env
+.env.*
+!.env.example
+
+# Local state and build leftovers.
+__pycache__/
+*.pyc
+.venv/

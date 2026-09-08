@@ -1,0 +1,165 @@
+# The module's self-description: the only thing a caller is expected to know
+# about it. Everything else is environment variables and endpoints.
+#
+# NO STATE IS WRITTEN HERE, AND THAT IS A DECISION. A hand-written line about
+# state goes stale SILENTLY — it does not break and does not go red, it goes on
+# reading as truth. Where the state actually lives is listed under `state`: every
+# one of those answers the question afresh on each request.
+name: search
+kind: mcp
+
+# WHAT IS PROVIDED — and only that.
+provides: |
+  · web search through its own metasearch layer over many engines — ag.search/1
+  · reading pages and parsing PDFs by address, with stub rejection — ag.read/1
+  · image search returning the file address, not only the page — ag.images/1
+  · a PNG screenshot WITH THE TEXT OF THE SAME VISIT, as a second side for
+    cross-checking a read — ag.shot/1
+  · deep search: find, read and DIGEST AN ANSWER — ag.deep/1
+
+# How it is called. `<host>` is whatever address the deployment binds; the
+# shipped configuration publishes NOTHING, and the one shipped overlay binds
+# 127.0.0.1 only.
+consumers:
+  mcp:
+    endpoint: POST http://<host>:8081/mcp        # JSON-RPC 2.0, protocol 2024-11-05
+    server_name: ag-mod-search
+    tools: [web_search, web_read, web_image_search, web_screenshot, web_deep_search]
+  http_search:
+    endpoint: GET http://<host>:8081/ag/search?q=&n=&page=&read=&min_engines=
+    contract: ag.search/1                        # contracts/ag.search.v1.md
+  http_read:
+    endpoint: GET http://<host>:8081/ag/read?url=&max_chars=&offset=&expect=&mode=
+    contract: ag.read/1                          # contracts/ag.read.v1.md
+  http_images:
+    endpoint: GET http://<host>:8081/ag/images?q=&n=&page=
+    contract: ag.images/1                        # contracts/ag.images.v1.md
+  http_deep:
+    endpoint: GET http://<host>:8081/ag/deep?q=&waves=
+    contract: ag.deep/1                          # contracts/ag.deep.v1.md
+  http_screenshot:
+    endpoint: GET http://<host>:8081/ag/screenshot?url=&expect=&full_page=&max_chars=
+    contract: ag.shot/1                          # not written yet; the tool
+                                                 # description is the source
+  observability:
+    engines: GET http://<host>:8081/engines?hours=24   # health of every engine
+    pages: GET http://<host>:8081/pages?hours=24       # is every reading path alive
+    stats: GET http://<host>:8081/stats                # is the service called at all
+
+networks:
+  # The module lives alone, in a network of its own that the compose file
+  # creates. It joins nothing external and requires nothing to exist beforehand.
+  - ag-mod-search
+
+ports:
+  # NOTHING IS PUBLISHED by the shipped configuration, and that is the point: a
+  # search engine reachable from the internet is an open proxy that goes to the
+  # network in the machine owner's name.
+  #
+  # PUBLISHING A CONTAINER PORT BYPASSES THE HOST FIREWALL'S USUAL RULES. That
+  # traffic goes through a chain that sits BEFORE the firewall's own hooks: while
+  # that chain is empty, the firewall reports a ban and the port is open to
+  # everyone. Closing it takes an explicit rule in that chain, restricting the
+  # source.
+  #
+  # The shipped overlay wiring/expose-localhost.yml binds 127.0.0.1:8081 and
+  # cannot make that mistake by construction.
+  published: none
+  overlay: wiring/expose-localhost.yml   # 127.0.0.1:8081 only
+
+health:
+  endpoint: GET http://<host>:8081/healthz
+  ok: '200 and {"ok": true}'
+  # Answers for the CAPABILITY, not for the process: it goes to the metasearch
+  # and returns 503 when that is unreachable. A live adapter in front of a dead
+  # metasearch must be unhealthy — a health check that answers for itself lies
+  # exactly when it is needed.
+  deep: GET /healthz?deep=1 — performs a REAL search
+  # The shallow check is green even when every engine is refusing: the metasearch
+  # does not report that. The deep one catches it but pays with an outbound
+  # request, so it is deliberately not the container health check.
+
+# THE MODEL. Needed by deep search and by ONE BRANCH of reading — a PDF with no
+# text layer, which is recognised. Search, image search and screenshots never
+# call a model: search reads its top links WITHOUT recognition, so a scan there
+# comes back named (`not_recognised (scan)`) rather than billed for.
+#
+# NO MODEL NAMES ARE WRITTEN HERE. They are set by variables, and a copy in this
+# file would be one more place that goes stale silently. What is configured NOW
+# is asked of the module itself.
+models:
+  variables:
+    key: LLM_API_KEY             # any provider speaking an OpenAI-compatible protocol
+    base_url: LLM_API_BASE       # set it in full; do not guess it by analogy
+    text: LLM_MODEL_TEXT
+    vision: LLM_MODEL_VISION     # separate: not every provider has vision
+    prices: LLM_PRICE_INPUT_PER_1K, LLM_PRICE_OUTPUT_PER_1K   # optional
+  what_is_configured_now: GET http://<host>:8081/healthz
+  money: |
+    The module KNOWS NO TARIFFS and invents none: the provider is whoever the
+    operator configured. It returns the tokens and the model name, and
+    `cost_usd: null` is the right answer rather than an omission — an invented
+    price is worse than a missing one, because somebody will cite it.
+
+    Given prices in LLM_PRICE_*, it multiplies: cost_usd is then filled in and
+    `cost_source` says the prices came from the operator's variables. Unset means
+    null, never zero — "we do not know the price" and "it cost nothing" must not
+    arrive as one number.
+  vision_is_not_visible_in_a_name: |
+    Whether a model can see is not deducible from its name, and probing names
+    does not find it: a provider can have a vision model whose name is
+    indistinguishable from a text one. Take it from the provider's
+    documentation. If LLM_MODEL_VISION is unset, a scanned PDF answers honestly
+    that recognition is not configured rather than calling the text model with a
+    picture.
+
+requires:
+  env:
+    SEARXNG_SECRET: |
+      Mandatory. There is no secret in the repository; the value lives only in
+      the .env file beside the deployment. The requirement is enforced by the
+      compose file through ${SEARXNG_SECRET:?}: the metasearch itself does NOT
+      fail without the variable — it silently takes a publicly known key from its
+      image template.
+
+deploy:
+  compose: docker-compose.yml
+  project: ag-mod-search
+  services:
+    searxng: pinned by digest in docker-compose.yml — the only place it is set
+    ag-search: built from adapter/ (python slim by digest)
+    browser: headless chromium sidecar; the browser path answers not_reached without it
+    prober: the same image; asks one engine every 10 s, round-robin, writes to SQLite
+
+# WHERE THE STATE ACTUALLY LIVES. All of these answer the question afresh on
+# every request, and have nowhere to go stale in between.
+state:
+  is_it_up: GET http://<host>:8081/healthz          # and is the metasearch alive, and the browser
+  what_can_it_do: GET http://<host>:8081/tool-spec  # the tool list, not our memory of it
+  is_it_called: GET http://<host>:8081/stats        # calls, model spend, the ledger
+  how_engines_answer: GET http://<host>:8081/engines?hours=24
+  how_pages_read: GET http://<host>:8081/pages?hours=24
+
+tests:
+  adapter: tests/test_adapter.py   # the MCP protocol and ag.search/1 against a fake metasearch
+  reader: tests/test_reader.py     # ag.read/1 against a fake site
+  pool: tests/test_pool.py         # the computed engine pool and its falsification
+  how_to_run: tests/in-image.sh    # the Python suites INSIDE the image, where the dependencies are
+  # NO COUNTS OF CHECKS ARE WRITTEN HERE, for the same reason as no state. The
+  # number grows with every commit and a line about it does not; they diverge
+  # silently. The run reports it itself, and always correctly.
+  what_they_do_not_check: |
+    The quality of the model's answers (it is faked in the tests), the real pool
+    over the prober's database, load, and the browser sidecar. "There are tests"
+    and "it is verified" are different claims.
+
+config: searxng/settings.yml — the engine settings, with the argument in comments
+
+# THE ENGINE POOL IS NOT LISTED HERE, and that is a decision. It changes as the
+# engines change, and any list in a manifest is behind the code by the evening —
+# that is, the manifest starts lying about the very thing it is read for.
+#
+# The truth about the pool lives in two machine-readable places:
+#   adapter/pool.py — how it is computed, from the prober's own probes;
+#   GET /engines    — who answers, who can be trusted, when they were last checked.
+engine_registry: computed — see adapter/pool.py and GET /engines

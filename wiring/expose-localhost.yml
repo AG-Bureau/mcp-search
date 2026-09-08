@@ -1,0 +1,39 @@
+# Overlay: publish the adapter ON THIS MACHINE'S LOOPBACK ONLY.
+#
+#     docker compose -f docker-compose.yml -f wiring/expose-localhost.yml up -d
+#     curl -s http://127.0.0.1:8081/healthz
+#
+# WHY THIS IS THE DEFAULT FOR SOMEBODY ELSE'S MACHINE. An overlay that writes
+# `8081:8081` publishes the port on ALL interfaces, and that is safe only together
+# with rules in the DOCKER-USER chain — rules that exist on one particular machine
+# and nowhere else.
+#
+# Measured: Docker passes traffic to published ports through FORWARD after DNAT,
+# while DOCKER-USER sits in FORWARD BEFORE the firewall's own hooks. As long as
+# that chain is empty, firewall rules do not apply to a published port at all —
+# the firewall status says one thing and the port is open to the whole internet.
+#
+# A search engine open to the outside is an open proxy that goes to the network in
+# the machine owner's name. Anyone copying this compose file together with the
+# all-interfaces overlay, and not knowing about DOCKER-USER, gets exactly that.
+# Our circumstances must not travel into somebody else's deployment silently.
+#
+# `127.0.0.1:8081` cannot make that mistake by construction: the port is visible
+# to the machine itself and no firewall rule is needed.
+#
+# ACCESS FROM OUTSIDE IS A DELIBERATE STEP, AND NO OVERLAY FOR IT SHIPS — writing
+# one is two lines, and knowing what to check before running it is the part worth
+# carrying:
+#
+#     services: {ag-search: {ports: ["8081:8081"]}}
+#
+#   1. `iptables -S DOCKER-USER` — an empty chain means the firewall does not
+#      apply to this port at all, whatever its status says;
+#   2. from another machine, `curl http://<this host>:8081/healthz` — it must
+#      refuse. If it answers, the metasearch behind it is reachable too;
+#   3. the metasearch itself must NEVER be published: reachable from outside it is
+#      an open proxy going to the network in the machine owner's name.
+services:
+  ag-search:
+    ports:
+      - "127.0.0.1:8081:8081"

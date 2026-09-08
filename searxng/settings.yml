@@ -1,0 +1,145 @@
+# Settings for our metasearch instance. They live IN THE REPOSITORY and are
+# mounted into the container as a file: keeping them only on the machine's disk
+# means losing them at the first rebuild and leaving no history of why this
+# particular engine set is enabled.
+#
+# Read the documentation before editing: https://docs.searxng.org/admin/settings/
+
+use_default_settings: true
+
+server:
+  # THERE IS NO SECRET HERE and there must not be. This file is tracked in git,
+  # and a value that once enters history cannot be taken out of it. The key comes
+  # from the environment: the metasearch overrides any value from the settings
+  # with the SEARXNG_SECRET variable.
+  #
+  # MIND THAT THE FAILURE IS NOT LOUD. With use_default_settings: true an absent
+  # variable gives not an error but the publicly known default from the image's
+  # settings template — the service comes up silently with a well-known key. So
+  # the variable is made mandatory by docker-compose.yml (${SEARXNG_SECRET:?...})
+  # rather than by the metasearch itself.
+  image_proxy: true
+
+search:
+  # The JSON interface: without it the metasearch returns html only, and it would
+  # have to be parsed — exactly the work it is installed to avoid.
+  formats:
+    - html
+    - json
+  # NO DEFAULT LANGUAGE. A default here decides which language the web answers
+  # in, on behalf of an operator who was never asked — and it is invisible in the
+  # answer. The adapter already picks a language PER QUERY from the script the
+  # query is written in, which is a decision the caller can see and control.
+  #
+  # Set one only if every query on this instance is in one language. Example, for
+  # an instance that works in Russian — this is how our own was tuned before the
+  # setting was taken out of the shipped file:
+  #   default_lang: "ru"
+  # The reading side has its own equivalent, READ_LANGUAGES, off for the same
+  # reason.
+
+# --- Engines -----------------------------------------------------------------
+#
+# WHAT THIS FILE DECIDES AND WHAT IT DOES NOT.
+#
+# `disabled` HERE DOES NOT CONTROL WHOM WE ASK. Measured on a live instance: an
+# engine DISABLED by this file and asked explicitly with engines=<name> returned
+# 9 results. Given an explicit list, the metasearch takes the engine from its
+# global registry without looking at this flag. The only hard prohibition from the
+# settings side is `inactive: true` (the engine is not registered at all), and it
+# is silent too.
+#
+# Two consequences follow, both important:
+#   1. THE ENGINE SET IS DECIDED BY WHOEVER CALLS. Here that is the computed pool
+#      in adapter/pool.py. This file is about configuring engines, not choosing
+#      them.
+#   2. A caller that sends its own literal list — including dead engines — is not
+#      affected by anything disabled here. That is cured only by the caller moving
+#      to ag.search/1, where the list comes from the module.
+#
+# And separately: AN UNKNOWN name in engines= produces no error — the metasearch
+# silently queries the whole general category. Measured: an invented engine name
+# returned 63 results from five engines, including engines nobody had measured.
+# That is why the adapter verifies names against /config BEFORE sending.
+#
+# WHY ANYTHING IS DISABLED HERE AT ALL. A blocked engine is not merely useless but
+# harmful: every query waits out its timeout and its captcha, and on failures the
+# metasearch suspends the engine and carries that state into neighbouring queries.
+#
+# TWO DIFFERENT WAYS TO DIE, and the difference decides what to do. Some engines
+# answer "access denied" and are marked in unresponsive_engines — that failure is
+# visible. Others simply return zero results and are NOT in unresponsive_engines
+# at all; verified separately on a query any working engine must answer. A failure
+# of the second kind is invisible even in the field raised to make failures
+# visible, which is why the adapter also returns engines_asked and
+# engines_answered: the difference gives the quietly empty ones with no guessing.
+#
+# A REFUSAL IS ABOUT THE ADDRESS, NOT ABOUT US. The same set of refusals was
+# reproduced letter for letter from a machine that had never made a single request
+# in its life. So engines closed to data-centre addresses are closed to the class,
+# not to our particular address: moving, pausing and rotating the address do not
+# help.
+engines:
+  # NO WEIGHTS. A weight silently favours one engine over the pool computed from
+  # observation — that is, it overrides a measured decision with a written one,
+  # in the one place where nothing reports it. Whom to ask is decided by
+  # adapter/pool.py from the probes.
+  #
+  # An instance that really does work in one language may still want them: ours
+  # carried `weight: 2` on yandex and bing while the queries were Russian. Kept
+  # here as an example rather than as a default, and with its price named — a
+  # weighted engine outranks a better-measured one and no answer says so.
+  - name: yandex
+    disabled: false
+  - name: bing
+    disabled: false
+  # A verdict of "dead parser" here would be wrong: after the transport change
+  # this engine returns 20 links. A measurement from a clean address distinguishes
+  # ADDRESSES but not FINGERPRINTS — both machines carried the same unusable one.
+  - name: resulthunter
+    disabled: false
+  - name: privacywall
+    disabled: false
+  - name: zapmeta
+    disabled: false
+  # access denied from both an old and a clean address: closed to data-centre
+  # addresses as a class, not curable by changing IP
+  - name: searchtoday
+    disabled: true
+  - name: mwmbl
+    disabled: false
+  # access denied from both an old and a clean address: closed to data-centre
+  # addresses as a class, not curable by changing IP
+  - name: infospace
+    disabled: true
+
+  # Neither broken nor banned: with language=all it does return a result. It is a
+  # point lookup of an article rather than a search engine, and on our kind of
+  # query its yield is near zero. Disabled so as not to pay for an empty answer in
+  # every query.
+  - name: wikipedia
+    disabled: true
+  - name: wikidata
+    disabled: false
+
+  # DISABLED ON AN OBSERVATION, NOT ON A VERDICT ABOUT THE ENGINE. Each of these
+  # refused from this address at the time of writing, and keeping a refusing
+  # engine enabled means paying its timeout on every query.
+  #
+  # A refusal is NOT proof that the engine is broken, and one of this list was
+  # already returned once transport changed: an experiment that varies the
+  # address does not vary the fingerprint. Re-check before treating any line here
+  # as settled — the prober will notice a return on its own only for engines the
+  # metasearch still offers.
+  - name: duckduckgo
+    disabled: true
+  - name: brave
+    disabled: true
+  - name: startpage
+    disabled: true
+  - name: qwant
+    disabled: true
+  - name: mojeek
+    disabled: true
+  - name: google
+    disabled: true
