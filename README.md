@@ -1,7 +1,7 @@
 # search — web search as a module
 
 [![MCP registry](https://img.shields.io/badge/MCP%20registry-com.ag--bureau%2Fsearch-2ea44f)](https://registry.modelcontextprotocol.io)
-[![License: FSL-1.1-ALv2](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue)](LICENSE)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 
 **A self-hosted MCP server for web search that reports how much of each answer to
 believe.** It runs on your machine, over your own metasearch instance, with your
@@ -184,5 +184,10 @@ attached. See [CONTRIBUTING](https://github.com/AG-Bureau/.github/blob/main/CONT
 
 ## License
 
-[Functional Source License 1.1, ALv2 future](LICENSE) — free for your own use;
-permission required to monetise. Converts to Apache 2.0 two years after release.
+[GNU Affero General Public License v3.0](LICENSE). Run it, change it, build on
+it. If you make it available to others OVER A NETWORK, the changes you made go
+back out under the same licence — that is the one obligation, and running a
+service counts as making it available.
+
+For whoever cannot live with that clause, a commercial licence is a question to
+ask rather than a fork to make.

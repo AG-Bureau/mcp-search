@@ -10,8 +10,11 @@ WHY pypdfium2 AND NOT PyMuPDF. Both render PDF pages; the choice was made on
 three grounds, in descending weight:
 
   · five times lighter: +13 MB to the image against +64 MB;
-  · calmer licence: BSD-3-Clause and Apache-2.0 against AGPL-3.0, whose network
-    clause has to be answered for a service that is reachable over the network;
+  · a licence that leaves a door open: BSD-3-Clause and Apache-2.0 against
+    AGPL-3.0. This module is itself AGPL-3.0, so the network clause is no longer
+    the objection it was — what remains is that somebody else's AGPL code cannot
+    be relicensed by us, and a dependency under it would block any commercial
+    licence we might grant. A permissive dependency keeps that choice ours;
   · the rendering path was already exercised on 73 pages of two real product
     catalogues before it landed here.
 """

@@ -36,7 +36,11 @@ RUN pip install --no-cache-dir "pypdf==6.17.0"
 # of the wheels themselves:
 #     pypdfium2   BSD-3-Clause, Apache-2.0          +13 MB
 #     pymupdf     AGPL-3.0 or Artifex Commercial    +64 MB
-# pypdfium2 is taken: five times lighter and on a calmer licence.
+# pypdfium2 is taken: five times lighter, and on a licence we can relicense
+# around. The module itself is AGPL-3.0, so pymupdf's copyleft would not clash
+# with it — but somebody else's AGPL code cannot be relicensed by us, and it
+# would block any commercial licence we grant. A permissive dependency keeps that
+# door open; the weight decides on its own anyway.
 #
 # PILLOW COMES ATTACHED, AND THAT IS EASY TO MISS WHEN COUNTING. pypdfium2
 # produces a raster but cannot save it: `to_pil()` requires Pillow. Thirteen
