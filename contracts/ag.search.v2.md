@@ -1,4 +1,4 @@
-# `ag.search/1` — the web-search provider contract
+# `ag.search/2` — the web-search provider contract
 
 > **Written from the code.** Every field name, value and limit below is taken
 > from `adapter/server.py`. If the service stops matching this document, the
@@ -13,10 +13,48 @@ two produces a document that is half promise and half plumbing.
 
 ## Contents
 
-Why the policy lives in the module · the interface · the three engine fields that
+What changed against `/1` · Why the policy lives in the module · the interface · the three engine fields that
 are always present · the four ways an engine fails · what counts as success ·
 failure direction · what corroboration does and does not mean.
 
+## What changed against `/1`, value by value
+
+The version number marks THE WIRE DICTIONARY and nothing else. `/1` and `/2`
+carry the same fields, the same shapes and the same guarantees; what changed is
+that the VALUES inside them are English. A caller branches on values, so the
+dictionary is part of the contract — and a changed dictionary under an unchanged
+name would be indistinguishable in a stored answer and in code being read.
+
+The break is loud on purpose: an answer says `/2`, and anything expecting `/1`
+fails at once instead of silently matching nothing. If you have `/1` answers in
+storage, this table is how to read them:
+
+| field | `/1` | `/2` |
+|---|---|---|
+| `engines_trust` | `чист` | `clean` |
+| | `кандидат` | `candidate` |
+| | `подменяет` | `substitutes` |
+| | `недоступен` | `unavailable` |
+| | `не проверялся` | `not_checked` |
+| `pool_source` | `наблюдение` | `observation` |
+| | `семя` | `seed` |
+| `read_status` | `прочитано` | `read` |
+| | `пусто` | `empty` |
+| | `заглушка` | `stub` |
+| | `отказ` | `refused` |
+| | `не открылась` | `unreachable` |
+| | `запрещено` | `forbidden` |
+| | `не дошли` | `not_reached` |
+| | `не читалась` | `not_read` |
+| `stub_check` | `чисто` | `clean` |
+| | `похоже на заглушку` | `looks_like_stub` |
+| | `не проверялось` | `not_checked` |
+| `text_source` | `текстовый слой` | `text_layer` |
+| | `распознано` | `recognised` |
+
+Nothing else moved: no field was added, removed or renamed, except that `pool_source` and `arguments_adjusted` are new in `/2`, and no
+guarantee changed. A `/1` consumer that branched on FIELDS rather than values
+needs only the new value names.
 ## Why the engine-selection policy belongs to the module
 
 A caller that keeps its own list of engines, its own batch size and its own
@@ -43,7 +81,7 @@ Also accepted: `read` (default true), `read_top`, `min_engines`, `per_engine`.
 
 ```json
 {
-  "contract": "ag.search/1",
+  "contract": "ag.search/2",
   "ok": true,
   "count": 6,
   "results": [

@@ -269,8 +269,8 @@ def main() -> int:
                  "params": {"name": "web_search", "arguments": {"query": QUERY}}})
     payload = json.loads(r["result"]["content"][0]["text"])
     check("a successful call is not marked isError", r["result"]["isError"] is False, r)
-    check("the answer declares the ag.search/1 contract",
-             payload["contract"] == "ag.search/1", payload)
+    check("the answer declares the ag.search/2 contract",
+             payload["contract"] == "ag.search/2", payload)
     check("a non-link result is dropped (2 of 3)", payload["count"] == 2, payload)
     check("the title is stripped of extra spaces",
              payload["results"][0]["title"] == "First", payload["results"][0])
@@ -319,7 +319,7 @@ def main() -> int:
         check(f"MCP: the field is present and [] when {name}",
                  payload.get("unresponsive_engines") == [], payload)
         code, payload = get("/ag/search?q=x")
-        check(f"ag.search/1: the field is present and [] when {name}",
+        check(f"ag.search/2: the field is present and [] when {name}",
                  payload.get("unresponsive_engines") == [], payload)
     MODE["body"] = REPLY
     _, r = post({"jsonrpc": "2.0", "id": 31, "method": "tools/call",
@@ -328,7 +328,7 @@ def main() -> int:
     check("MCP: a silent engine arrives with its reason",
              payload["unresponsive_engines"] == [["zapmeta", "timeout"]], payload)
     code, payload = get("/ag/search?q=x")
-    check("ag.search/1: a silent engine arrives with its reason",
+    check("ag.search/2: a silent engine arrives with its reason",
              payload["unresponsive_engines"] == [["zapmeta", "timeout"]], payload)
 
     # The hole: an engine that returned emptiness silently does NOT appear in
@@ -356,7 +356,7 @@ def main() -> int:
              (asked - answered - silent) == (asked - answered - silent)
              and asked >= answered, (sorted(asked), sorted(answered)))
     code, payload = get("/ag/search?q=x")
-    check("ag.search/1 returns the same two fields",
+    check("ag.search/2 returns the same two fields",
              "engines_asked" in payload and "engines_answered" in payload, payload)
 
     # The third way for an engine to fail: answer, but not our question. Measured
@@ -597,10 +597,10 @@ def main() -> int:
     MODE["not_json"] = False
 
     server._reset_rate()
-    print("\nag.search/1 over plain HTTP:")
+    print("\nag.search/2 over plain HTTP:")
     code, payload = get("/ag/search?q=" + urllib.parse.quote(QUERY) + "&n=1")
     check("GET /ag/search answers 200 with the contract", code == 200
-             and payload["contract"] == "ag.search/1" and payload["count"] == 1, payload)
+             and payload["contract"] == "ag.search/2" and payload["count"] == 1, payload)
     code, payload = get("/ag/search?q=")
     check("an empty q gives a refusal with an explanation, not an empty result set",
              code == 502 and payload["ok"] is False, payload)
@@ -1610,13 +1610,13 @@ def main() -> int:
 
     print("\n== the ok field is uniform across the contracts ==")
     # NEIGHBOURING TOOLS THAT CALL THE SAME THING BY DIFFERENT NAMES are a future
-    # mistake by the caller. The rule is written down in ag.read.v1.md: without an
+    # mistake by the caller. The rule is written down in ag.read.v2.md: without an
     # `ok` field on the screenshot, a caller with a shared `if not resp["ok"]`
     # would meet a refusal where all is well.
     answers = {
-        "ag.search/1": server.search("test", 1),
-        "ag.read/1": reader.read([]),
-        "ag.images/1": server.image_search(""),
+        "ag.search/2": server.search("test", 1),
+        "ag.read/2": reader.read([]),
+        "ag.images/2": server.image_search(""),
         "ag.shot/1": reader.screenshot("https://пример.рф/нет"),
     }
     for name, resp in answers.items():
@@ -1626,7 +1626,7 @@ def main() -> int:
                  resp.get("contract") == name, resp.get("contract"))
     # AN EMPTY RESULT IS A SUCCESS in every contract where it is possible: "we
     # looked and found nothing" and "we could not look" are different outcomes.
-    check("ag.search/1: an empty result set is ok:true, not a refusal",
+    check("ag.search/2: an empty result set is ok:true, not a refusal",
              server.search("no such query zzz", 1).get("ok") is True)
 
     print("\n== images ==")
@@ -1648,7 +1648,7 @@ def main() -> int:
 
     server._reset_rate()
     d = server.image_search("ghost automotive", n=3)
-    check("images: the contract is declared", d["contract"] == "ag.images/1", d.get("contract"))
+    check("images: the contract is declared", d["contract"] == "ag.images/2", d.get("contract"))
     check("images: the full field set on the failure path too",
              set(server._images_refusal("x")) == set(d), 
              set(server._images_refusal("x")) ^ set(d))

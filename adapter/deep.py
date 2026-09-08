@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Deep search: contract ag.deep/1. A wave is find, read, verify.
+"""Deep search: contract ag.deep/2. A wave is find, read, verify.
 
 WHAT THIS FILE PAID FOR IN MEASUREMENTS, AND WHY THOSE NOTES OUTLIVE THE CODE.
 
@@ -39,7 +39,7 @@ import os
 import re
 import time
 
-CONTRACT_NAME = "ag.deep/1"
+CONTRACT_NAME = "ag.deep/2"
 
 # Wave ceilings. Not quality thresholds — cost boundaries.
 MAX_QUERIES = 8
@@ -982,7 +982,7 @@ def _as_float(what, default: float) -> float:
 
 def deep_search(question: str, search_fn, read_many, model_client,
                 waves: int = 0, budget_s: float = 0) -> dict:
-    """Deep search. Contract ag.deep/1. Never raises.
+    """Deep search. Contract ag.deep/2. Never raises.
 
     THE DEPTH IS CHOSEN BY US BUT DECLARED IN THE ANSWER. "Depending on the
     question" means the number of waves is our decision; therefore the caller is

@@ -1,4 +1,4 @@
-# `ag.images/1` — the image-search contract
+# `ag.images/2` — the image-search contract
 
 > **Written from the code.** Every field name and limit below is taken from
 > `adapter/server.py`. If the service stops matching this document, the service
@@ -8,10 +8,34 @@ Status: **implemented**. MCP tool `web_image_search`, plain door `GET /ag/images
 
 ## Contents
 
-Why images are a separate tool · TWO ADDRESSES on one result and why they must
+What changed against `/1` · Why images are a separate tool · TWO ADDRESSES on one result and why they must
 not be confused · its own engine pool and its own reference · the shape of the
 answer · the fan-out defect · what is deliberately absent.
 
+## What changed against `/1`, value by value
+
+The version number marks THE WIRE DICTIONARY and nothing else. `/1` and `/2`
+carry the same fields, the same shapes and the same guarantees; what changed is
+that the VALUES inside them are English. A caller branches on values, so the
+dictionary is part of the contract — and a changed dictionary under an unchanged
+name would be indistinguishable in a stored answer and in code being read.
+
+The break is loud on purpose: an answer says `/2`, and anything expecting `/1`
+fails at once instead of silently matching nothing. If you have `/1` answers in
+storage, this table is how to read them:
+
+| field | `/1` | `/2` |
+|---|---|---|
+| `pool_source` | `наблюдение` | `observation` |
+| | `семя` | `seed` |
+| `all_engines_clean` | — | renamed to `all_engines_on_topic` |
+
+Nothing else moved: no field was added, removed or renamed, apart from `all_engines_clean`. That one is a RENAMED FIELD rather than a
+renamed value, and it was renamed because the name lied: in web search the flag
+is about trust labels earned against references, and image engines have no such
+labels. One name over two meanings is a trap for the caller, and no
+guarantee changed. A `/1` consumer that branched on FIELDS rather than values
+needs only the new value names.
 ## Why separate from `web_search`
 
 Not for symmetry. Images have a different subject, different engines and a
@@ -108,4 +132,4 @@ paying a model for every result in a result set.
 
 **No filters by size or licence.** Not every engine returns them, and a field
 filled in for a third of the results reads as "the rest are unrestricted" —
-exactly the blind spot `ag.search/1` is written against.
+exactly the blind spot `ag.search/2` is written against.

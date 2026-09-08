@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Tests of page reading (ag.read/1) WITH NO outbound requests.
+"""Tests of page reading (ag.read/2) WITH NO outbound requests.
 
 A fake site on a local port instead of the internet. The reason is the same as
 for the search tests and stronger here: reading is exactly the work for which
@@ -422,7 +422,7 @@ def main() -> int:
                  set(r) >= fields, sorted(fields - set(r)))
     r = reader.read(["http://10.0.0.5/x"])["results"][0]
     check("all 27 fields are returned on a refusal too", set(r) >= fields, sorted(fields - set(r)))
-    check("contract is named", reader.read([])["contract"] == "ag.read/1")
+    check("contract is named", reader.read([])["contract"] == "ag.read/2")
     check("paths_available tells the truth about the browser",
              reader.paths()["browser"] == "not_wired_up", reader.paths())
 

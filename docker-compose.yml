@@ -80,7 +80,7 @@ services:
   # else's sidecar. Search has to work over MCP and the metasearch does not speak
   # MCP, so the transport lives here. The engine-selection policy moves here as
   # well, instead of sitting in a consumer and duplicating settings.yml (see
-  # contracts/ag.search.v1.md).
+  # contracts/ag.search.v2.md).
   #
   # The metasearch itself is NOT changed and stays reachable directly: an existing
   # consumer talks to it over SEARXNG_URL and knows nothing about the adapter.

@@ -1,4 +1,4 @@
-# `ag.deep/1` — the deep-search contract
+# `ag.deep/2` — the deep-search contract
 
 > **Written from the code.** Every field name, value and limit below is taken
 > from `adapter/deep.py` and `adapter/server.py`. If the service stops matching
@@ -8,12 +8,44 @@ Status: **implemented**. MCP tool `web_deep_search`, plain door `GET /ag/deep`.
 
 ## Contents
 
-How this tool differs from the two beside it · markers, the single point of
+What changed against `/1` · How this tool differs from the two beside it · markers, the single point of
 failure of the whole verification apparatus · the five outcomes · ambiguity, and
 why a mechanism finds it rather than a model · the shape of the answer · what is
 visible about cost and time · what has been measured and what the measurement
 does not say.
 
+## What changed against `/1`, value by value
+
+The version number marks THE WIRE DICTIONARY and nothing else. `/1` and `/2`
+carry the same fields, the same shapes and the same guarantees; what changed is
+that the VALUES inside them are English. A caller branches on values, so the
+dictionary is part of the contract — and a changed dictionary under an unchanged
+name would be indistinguishable in a stored answer and in code being read.
+
+The break is loud on purpose: an answer says `/2`, and anything expecting `/1`
+fails at once instead of silently matching nothing. If you have `/1` answers in
+storage, this table is how to read them:
+
+| field | `/1` | `/2` |
+|---|---|---|
+| `outcome` | `исход` was the KEY; its values were already English | `outcome` |
+| `sources[]` | `источники` | `sources` |
+| | `спрошено` | `queries_asked` |
+| | `не_вышло` | `queries_failed` |
+| | `пусто_по` | `queries_empty` |
+| | `ссылок` | `links_found` |
+| `ambiguity` | `варианты` | `variants` |
+| | `один_предмет` | `same_subject` |
+| | `ответ` | `answer` |
+| | `оборван` | `truncated` |
+| | `сведено_по` | `digested_from` |
+| | `основание` | `basis` |
+| | `сведено_по_годным` | `from_on_target` |
+| `read_status`, `stub_check`, `text_source` in `sources[]` | as in `ag.read/1` | as in `ag.read/2` |
+
+Nothing else moved: no field was added, removed or renamed, and no
+guarantee changed. A `/1` consumer that branched on FIELDS rather than values
+needs only the new value names.
 ## One tool of three, and the line is drawn
 
 | tool | what it does | what it returns |

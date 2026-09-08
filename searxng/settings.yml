@@ -55,7 +55,7 @@ search:
 #      them.
 #   2. A caller that sends its own literal list — including dead engines — is not
 #      affected by anything disabled here. That is cured only by the caller moving
-#      to ag.search/1, where the list comes from the module.
+#      to ag.search/2, where the list comes from the module.
 #
 # And separately: AN UNKNOWN name in engines= produces no error — the metasearch
 # silently queries the whole general category. Measured: an invented engine name

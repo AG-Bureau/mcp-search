@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Reading a page by address — the module's second capability, contract ag.read/1.
+"""Reading a page by address — the module's second capability, contract ag.read/2.
 
 WHY IT IS SEPARATE FROM SEARCH. The costs are incomparable and invisible to the
 caller: a search is 0.2-1 s and one outbound request, a read is seconds and
 megabytes, and the browser stage is up to a minute and a half. An argument like
 `read_results: true` on web_search would make the cost of a call unpredictable.
 Second: search failures arrive per ENGINE, reading failures per ADDRESS; merged
-into one response they produce exactly the blind spot ag.search/1 was written
+into one response they produce exactly the blind spot ag.search/2 was written
 against.
 
 WHAT WAS MEASURED, and why the code looks like this. A corpus of 194 addresses
@@ -57,7 +57,7 @@ from html.parser import HTMLParser
 import model      # the model client: vision for scans
 import render     # rendering PDF pages to PNG
 
-CONTRACT = "ag.read/1"
+CONTRACT = "ag.read/2"
 
 # --- Thresholds and policy ---------------------------------------------------
 # Everything below is MODULE policy, not a caller's argument. Search is built the
@@ -1653,7 +1653,7 @@ def read_many(url_list: list[str], max_chars: int = DEFAULT_CHARS,
 
 def read(urls, max_chars=DEFAULT_CHARS, offset=0, fmt="markdown",
          links=False, expect=None, mode="auto", fresh=False) -> dict:
-    """Read pages by address. Contract ag.read/1.
+    """Read pages by address. Contract ag.read/2.
 
     SUCCESS MEANS "EVERY NAMED ADDRESS GOT A NAMED OUTCOME", even when every
     outcome is a refusal. The same rule as in search: `ok: false` if and only if
@@ -1705,7 +1705,7 @@ def read(urls, max_chars=DEFAULT_CHARS, offset=0, fmt="markdown",
                                 expect, mode, bool(fresh), deadline))
     for url in surplus:
         # Named but not read. Dropping them silently is not allowed: the client
-        # must SEE that part of the batch was skipped (ag.search/1, "a partial
+        # must SEE that part of the batch was skipped (ag.search/2, "a partial
         # case is not an error").
         results.append(_blank(url, "not_reached",
                                   f"at most {MAX_URLS} addresses are read per "

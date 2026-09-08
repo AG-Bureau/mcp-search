@@ -32,10 +32,10 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import reader          # page reading: contract ag.read/1, see reader.py
+import reader          # page reading: contract ag.read/2, see reader.py
 import pool            # the engine pool — computed, never written by hand
 import model           # the single place where the module talks to a model
-import deep            # deep search: wave orchestration, contract ag.deep/1
+import deep            # deep search: wave orchestration, contract ag.deep/2
 import refs            # the references: one source for the prober and the views
 
 # --- Call accounting ---------------------------------------------------------
@@ -85,7 +85,7 @@ def _ago(t: float | None) -> str | None:
             + f" ({int(time.time() - t)} s ago)")
 
 
-CONTRACT = "ag.search/1"
+CONTRACT = "ag.search/2"
 PROTOCOL = "2024-11-05"                      # the same as the caller's MCP server
 # THE VERSION IS TAKEN FROM ONE PLACE, not written out here as well. A literal
 # would be a second truth about the same thing: the release it names and the one
@@ -1409,7 +1409,7 @@ def _reading_state(hours: int = 24) -> tuple[int, dict]:
 
 # --- Image search ------------------------------------------------------------
 
-CONTRACT_IMAGES = "ag.images/1"
+CONTRACT_IMAGES = "ag.images/2"
 
 
 def _image_on_topic(query: str, items: list[dict]) -> bool:
@@ -1444,7 +1444,7 @@ def _image_on_topic(query: str, items: list[dict]) -> bool:
 
 
 def image_search(query: str, n=12, page=0) -> dict:
-    """Image search. Contract ag.images/1. Never raises.
+    """Image search. Contract ag.images/2. Never raises.
 
     BUILT THE SAME WAY AS WEB SEARCH, and not out of laziness: the same one-engine-
     at-a-time order, the same rate limiter, the same computed pool — only in ITS
@@ -2438,7 +2438,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200 if res.get("ok") else 502, res)
             return
         if parsed.path == "/ag/read":
-            # The plain HTTP door for reading, contract ag.read/1. Arguments
+            # The plain HTTP door for reading, contract ag.read/2. Arguments
             # arrive as strings — coercion and ceilings live in reader.read() and
             # not here, or two doors would hold two editions of one policy and
             # diverge at the first edit.
@@ -2612,7 +2612,7 @@ def main() -> None:
         return
     srv = Server(("0.0.0.0", PORT), Handler)
     print(f"ag-mod-search: MCP on POST :{PORT}/mcp, "
-          f"ag.search/1 on GET :{PORT}/ag/search, metasearch={SEARXNG_URL}",
+          f"ag.search/2 on GET :{PORT}/ag/search, metasearch={SEARXNG_URL}",
           flush=True)
     srv.serve_forever()
 

@@ -482,7 +482,7 @@ CREATE TABLE IF NOT EXISTS reads (
   url       TEXT    NOT NULL,
   path      TEXT    NOT NULL,      -- plain | browser: whose health this is
   expected  TEXT    NOT NULL,      -- a marker in the text, or the expected status
-  status    TEXT    NOT NULL,      -- the ag.read/1 outcome, seven values
+  status    TEXT    NOT NULL,      -- the ag.read/2 outcome, seven values
   via       TEXT,                  -- what actually fetched it
   http_status INTEGER,
   chars     INTEGER NOT NULL,

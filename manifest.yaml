@@ -10,12 +10,12 @@ kind: mcp
 
 # WHAT IS PROVIDED — and only that.
 provides: |
-  · web search through its own metasearch layer over many engines — ag.search/1
-  · reading pages and parsing PDFs by address, with stub rejection — ag.read/1
-  · image search returning the file address, not only the page — ag.images/1
+  · web search through its own metasearch layer over many engines — ag.search/2
+  · reading pages and parsing PDFs by address, with stub rejection — ag.read/2
+  · image search returning the file address, not only the page — ag.images/2
   · a PNG screenshot WITH THE TEXT OF THE SAME VISIT, as a second side for
     cross-checking a read — ag.shot/1
-  · deep search: find, read and DIGEST AN ANSWER — ag.deep/1
+  · deep search: find, read and DIGEST AN ANSWER — ag.deep/2
 
 # How it is called. `<host>` is whatever address the deployment binds; the
 # shipped configuration publishes NOTHING, and the one shipped overlay binds
@@ -36,18 +36,23 @@ consumers:
     # missing: the browser path reports not_wired_up, the pool comes back as seed.
   http_search:
     endpoint: GET http://<host>:8081/ag/search?q=&n=&page=&read=&min_engines=
-    contract: ag.search/1                        # contracts/ag.search.v1.md
+    contract: ag.search/2                        # contracts/ag.search.v2.md
   http_read:
     endpoint: GET http://<host>:8081/ag/read?url=&max_chars=&offset=&expect=&mode=
-    contract: ag.read/1                          # contracts/ag.read.v1.md
+    contract: ag.read/2                          # contracts/ag.read.v2.md
   http_images:
     endpoint: GET http://<host>:8081/ag/images?q=&n=&page=
-    contract: ag.images/1                        # contracts/ag.images.v1.md
+    contract: ag.images/2                        # contracts/ag.images.v2.md
   http_deep:
     endpoint: GET http://<host>:8081/ag/deep?q=&waves=
-    contract: ag.deep/1                          # contracts/ag.deep.v1.md
+    contract: ag.deep/2                          # contracts/ag.deep.v2.md
   http_screenshot:
     endpoint: GET http://<host>:8081/ag/screenshot?url=&expect=&full_page=&max_chars=
+    # STILL /1 WHILE THE OTHER FOUR MOVED TO /2, and that is the answer rather
+    # than an oversight: the number marks the wire DICTIONARY. The screenshot
+    # answer had no renamed values — `page_text` and `page_text_truncated` were
+    # ADDED, and an addition breaks nobody. Bumping it for tidiness would make
+    # the number mean "we edited something", and then it would mean nothing.
     contract: ag.shot/1                          # not written yet; the tool
                                                  # description is the source
   observability:
@@ -150,8 +155,8 @@ state:
   how_pages_read: GET http://<host>:8081/pages?hours=24
 
 tests:
-  adapter: tests/test_adapter.py   # the MCP protocol and ag.search/1 against a fake metasearch
-  reader: tests/test_reader.py     # ag.read/1 against a fake site
+  adapter: tests/test_adapter.py   # the MCP protocol and ag.search/2 against a fake metasearch
+  reader: tests/test_reader.py     # ag.read/2 against a fake site
   pool: tests/test_pool.py         # the computed engine pool and its falsification
   how_to_run: tests/in-image.sh    # the Python suites INSIDE the image, where the dependencies are
   # NO COUNTS OF CHECKS ARE WRITTEN HERE, for the same reason as no state. The
