@@ -8,8 +8,7 @@
 [![License](https://img.shields.io/badge/License-AGPL--3.0-E23A50?style=for-the-badge)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white&style=for-the-badge)](adapter/Dockerfile)
 [![Self-hosted](https://img.shields.io/badge/Self--hosted-Docker_Compose-2496ED?logo=docker&logoColor=white&style=for-the-badge)](#-install)
-
-[![Glama score](https://glama.ai/mcp/servers/AG-Bureau/mcp-search/badge)](https://glama.ai/mcp/servers/AG-Bureau/mcp-search)
+[![ag-mcp-search MCP server — quality and maintenance score on Glama](https://glama.ai/mcp/servers/AG-Bureau/mcp-search/badges/score.svg)](https://glama.ai/mcp/servers/AG-Bureau/mcp-search)
 
 </div>
 
