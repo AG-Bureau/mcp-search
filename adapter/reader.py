@@ -6,7 +6,7 @@ caller: a search is 0.2-1 s and one outbound request, a read is seconds and
 megabytes, and the browser stage is up to a minute and a half. An argument like
 `read_results: true` on web_search would make the cost of a call unpredictable.
 Second: search failures arrive per ENGINE, reading failures per ADDRESS; merged
-into one response they produce exactly the blind spot ag.search/2 was written
+into one response they produce exactly the blind spot ag.search/3 was written
 against.
 
 WHAT WAS MEASURED, and why the code looks like this. A corpus of 194 addresses
@@ -111,7 +111,7 @@ DOMAIN_WAIT_MAX_S = 8.0
 # language the web answers in, on behalf of an operator who was never asked; the
 # default is therefore no preference at all. Setting it is a documented example,
 # not a default.
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 READ_HOME = "https://github.com/AG-Bureau/mcp-search"
 READ_CONTACT = (os.environ.get("READ_CONTACT") or "").strip() or READ_HOME
 READ_LANGUAGES = (os.environ.get("READ_LANGUAGES") or "").strip()
@@ -809,6 +809,16 @@ def _check_url(url: str) -> tuple[str, str]:
                              "results into one text")
     if _is_internal(pth.hostname or ""):
         return "forbidden", "the address leads inside the perimeter"
+    # THE PORT IS PART OF THE ADDRESS AND IS CHECKED HERE, where addresses are
+    # judged. `urlsplit(...).port` RAISES on a port outside 0-65535 or on a
+    # non-numeric one, and the raise happens later, on a path that has no `try`
+    # around it: the caller then gets no answer at all — not a refusal, not a
+    # status, an empty body. A verdict about an address belongs where verdicts
+    # about addresses are made, and a bad port is a refusal like any other.
+    try:
+        pth.port
+    except ValueError as exc:
+        return "forbidden", f"the port in the address is not usable: {exc}"
     return "", ""
 
 
@@ -844,9 +854,25 @@ def _robots_verdict(url: str, deadline: float) -> str:
             # it proves the host exists, and it is made at somebody else's
             # direction.
             with _OPENER.open(req, timeout=5) as o:
-                rules = o.read(200_000).decode("utf-8", "replace")
+                # UNPACKED LIKE ANY OTHER BODY. We announce `Accept-Encoding:
+                # gzip, deflate`, so a site is entitled to answer compressed —
+                # and compressed bytes decoded as text become rubbish in which
+                # `Disallow` is never found. The file then reads as "no rules",
+                # the verdict comes back `allowed`, and a site that forbade us is
+                # walked anyway. For a module that claims to be polite this is the
+                # worst kind of silent failure: the ban exists, we cannot see it,
+                # and we say out loud that we may.
+                raw, unpacked_ok = _decompress(
+                    o.read(200_000), o.headers.get("Content-Encoding", ""))
+                # A FILE WE COULD NOT UNPACK IS NOT A FILE WITHOUT RULES. Treating
+                # it as empty would say `allowed` over a site whose rules we
+                # simply failed to read — the failure direction this module
+                # forbids. `not_checked` is the honest verdict.
+                rules = raw.decode("utf-8", "replace") if unpacked_ok else None
         except Exception:  # noqa: BLE001
             rules = ""    # no file, or we were not let in — that is NOT a ban
+        if rules is None:
+            return "not_checked"
         with _robots_lock:
             _robots[key] = (time.time(), rules)
     if not rules.strip():
@@ -932,8 +958,12 @@ def _blank(url: str, status: str, reason: str, **extra) -> dict:
             "status": status, "reason": reason,
             "http_status": None, "content_type": "",
             "content": "", "chars": 0, "total_chars": None, "truncated": False,
+            # Cut at the DOWNLOAD ceiling — a different event from `truncated`,
+            # which is about the caller's own `max_chars` window. False here
+            # means "the whole document was taken", never "we did not look".
+            "download_truncated": False,
             "offset": 0, "format": "",
-            "via": "", "read_at": None, "elapsed_ms": None,
+            "via": "", "read_at": None, "cache_age_s": 0, "elapsed_ms": None,
             "title": "", "published": "", "lang": "",
             "links": [], "links_total": None,
             "stub_check": "not_checked", "stub_reason": "",
@@ -953,19 +983,35 @@ def _blank(url: str, status: str, reason: str, **extra) -> dict:
 
 # --- Downloading -------------------------------------------------------------
 
-def _decompress(raw: bytes, encoding: str) -> bytes:
-    k = (encoding or "").lower()
+def _decompress(raw: bytes, encoding: str) -> tuple[bytes, bool]:
+    """(bytes, unpacked_ok). Never raises.
+
+    THE FAILURE IS RETURNED, NOT SWALLOWED. Handing the compressed bytes back as
+    though they were the page — "the parser will see it" — is an assumption that
+    does not hold: nothing downstream looks at them, the status stays `read`,
+    rejection says `clean`, and binary rubbish arrives in `content` as text. The
+    same class as casting a boolean: a silent coercion where a named refusal
+    belongs.
+    """
+    k = (encoding or "").strip().lower()
     try:
-        if "gzip" in k:
-            return gzip.decompress(raw)
+        if "gzip" in k or "x-gzip" in k:
+            return gzip.decompress(raw), True
         if "deflate" in k:
             try:
-                return zlib.decompress(raw)
+                return zlib.decompress(raw), True
             except zlib.error:
-                return zlib.decompress(raw, -zlib.MAX_WBITS)
+                return zlib.decompress(raw, -zlib.MAX_WBITS), True
     except Exception:  # noqa: BLE001
-        return raw    # broken packaging — hand it on, the parser will see it
-    return raw
+        return b"", False
+    if k and k not in ("identity", "none"):
+        # AN ENCODING WE DO NOT KNOW IS NOT AN ABSENT ONE. We announce gzip and
+        # deflate, but a server may answer with brotli or another anyway — and handing
+        # those bytes on unchanged puts a compressed stream into `content` under
+        # `status: read`, which is the same substitution as a broken gzip passed
+        # off as text. What we cannot decode, we do not call decoded.
+        return b"", False
+    return raw, True
 
 
 class RedirectBlocked(Exception):
@@ -1004,30 +1050,102 @@ class _RedirectGuard(urllib.request.HTTPRedirectHandler):
 _OPENER = urllib.request.build_opener(_RedirectGuard)
 
 
+def _read_bounded(o, limit: int, deadline: float) -> tuple[bytes, bool]:
+    """Read at most `limit` bytes and never past `deadline`. (bytes, ran_out).
+
+    A TIMEOUT MEASURES WAITING, AND A SLOW PAGE NEVER MAKES US WAIT. A server
+    that sends one byte per second keeps the connection healthy and the data
+    flowing, so no socket timeout ever fires: measured on a trap, 380 seconds
+    with a declared 90-second ceiling and no answer at all. That is not an
+    attacker but an ordinary overloaded page.
+
+    So the bound here is on the WHOLE download rather than on the pause inside
+    it, and `read1` is what makes it enforceable: it hands back whatever has
+    arrived instead of blocking until the buffer is full, so the deadline is
+    consulted between pieces rather than after the last one.
+    """
+    got = bytearray()
+    while len(got) <= limit:
+        if time.time() > deadline:
+            return bytes(got), True
+        piece = o.read1(min(65536, limit + 1 - len(got)))
+        if not piece:
+            break
+        got += piece
+    return bytes(got), False
+
+
 def _fetch(url: str, timeout: float) -> tuple[int, str, bytes, str, str, bool]:
     """(code, type, body, final_url, error, truncated). Never raises.
 
     We read WITH A LIMIT (`read(CEILING + 1)`), not to the end: the address comes
     from outside, and a 900 MB response is not a hypothesis but an ordinary data
-    dump behind a link in a result set. The ceiling is applied before decoding,
-    because what needs protecting is memory, not the tidiness of a number.
+    dump behind a link in a result set.
+
+    THE LIMIT IS MEASURED ON WHAT THE CALLER RECEIVES, i.e. after unpacking, while
+    the READ is still bounded before it — the download protects memory, the
+    ceiling describes the text. Measuring one and cutting the other made a 300 KB
+    compressed page that unpacks to 5 MB come back as "read, whole" with three
+    megabytes silently gone and a cursor running into nothing.
     """
     req = urllib.request.Request(url, headers=HTTP_HEADERS)
+    # THE WHOLE FETCH HAS AN END, not just each wait inside it.
+    deadline = time.time() + timeout
     try:
         with _OPENER.open(req, timeout=timeout) as o:
             kind = o.headers.get("Content-Type", "") or ""
-            body = o.read(DOWNLOAD_CEILING + 1)
+            body, ran_out = _read_bounded(o, DOWNLOAD_CEILING, deadline)
+            if ran_out:
+                # A PARTIAL DOCUMENT IS NOT A DOCUMENT. Handing back what
+                # arrived would make a page that was still being written look
+                # like a page that ends there — the same substitution as passing
+                # compressed bytes off as text. The refusal names the rate, so
+                # the caller can tell "the site is slow" from "the site is down".
+                rate = len(body) / max(0.001, timeout)
+                return (0, kind, b"", url,
+                        f"the page was still arriving after {timeout:.0f} s: "
+                        f"{len(body)} bytes at about {rate:.0f} B/s. A page this "
+                        "slow is not read whole, and a piece of it would be "
+                        "indistinguishable from all of it", False)
             # THE CEILING IS CHOSEN BY THE CONTENT, not by the header: a PDF can
             # be served under any type, while the first five bytes do not lie. We
             # read on only when the general ceiling was reached AND it really is
             # a PDF.
-            is_pdf = body[:5] == b"%PDF-" or "pdf" in kind.lower()
-            if len(body) > DOWNLOAD_CEILING and is_pdf:
-                body += o.read(PDF_CEILING - len(body) + 1)
+            packing = o.headers.get("Content-Encoding", "") or ""
+            # THE PDF SIGNATURE IS READ OFF THE UNPACKED BYTES: a compressed PDF
+            # starts with the gzip magic, not with `%PDF-`, and the type header
+            # lies often enough that the signature is the second opinion here.
+            unpacked, unpacked_ok = _decompress(body, packing)
+            if not unpacked_ok:
+                # A stream cut at the ceiling cannot be unpacked, and neither can
+                # a broken one. Either way we have no text — and say so, instead
+                # of passing raw bytes off as content.
+                known = any(w in (packing or "").lower()
+                            for w in ("gzip", "deflate", "identity"))
+                return (o.status, kind, b"", o.geturl(),
+                        f"the response is packed as {packing!r} and could not be "
+                        + ("unpacked" if known
+                           else "unpacked: this module reads gzip and deflate, "
+                                "and asks for no other encoding")
+                        + (" — it exceeds the download ceiling and arrived cut off"
+                           if len(body) > DOWNLOAD_CEILING else ""),
+                        False)
+            is_pdf = unpacked[:5] == b"%PDF-" or "pdf" in kind.lower()
+            if len(body) > DOWNLOAD_CEILING and is_pdf and not packing:
+                more, ran_out = _read_bounded(o, PDF_CEILING - len(body), deadline)
+                body += more
+                if ran_out:
+                    return (0, kind, b"", url,
+                            f"the PDF was still arriving after {timeout:.0f} s: "
+                            f"{len(body)} bytes. A partly downloaded PDF is "
+                            "indistinguishable from a broken one", False)
+                unpacked = body
             limit = PDF_CEILING if is_pdf else DOWNLOAD_CEILING
-            truncated = len(body) > limit
-            body = _decompress(body, o.headers.get("Content-Encoding", ""))
-            return o.status, kind, body[:limit], o.geturl(), "", truncated
+            # MEASURED ON THE UNPACKED SIZE — the number the caller can check
+            # against `content` — and cut to the same limit, so the flag and the
+            # cut describe one and the same thing.
+            truncated = len(unpacked) > limit
+            return o.status, kind, unpacked[:limit], o.geturl(), "", truncated
     except RedirectBlocked as e:
         # The distinct code -1 means "stopped by us", not "the server answered".
         # Zero here would mean "did not open" and would heap our own refusal in
@@ -1040,8 +1158,9 @@ def _fetch(url: str, timeout: float) -> tuple[int, str, bytes, str, str, bool]:
         # told apart by the status code alone — and the code lies (a missing page
         # answers 200 five times out of six).
         try:
-            body = _decompress(e.read(DOWNLOAD_CEILING + 1),
-                                e.headers.get("Content-Encoding", ""))[:DOWNLOAD_CEILING]
+            body, _ok = _decompress(e.read(DOWNLOAD_CEILING + 1),
+                                     e.headers.get("Content-Encoding", ""))
+            body = body[:DOWNLOAD_CEILING]
             kind = e.headers.get("Content-Type", "") or ""
         except Exception:  # noqa: BLE001
             body, kind = b"", ""
@@ -1176,7 +1295,16 @@ def _read_one(url: str, max_chars: int, offset: int, fmt: str, links: bool,
                     _to_cache(key, done)
 
     done["elapsed_ms"] = int((time.time() - began) * 1000)
-    done["read_at"] = int(time.time())
+    # `read_at` IS WHEN THE PAGE WAS READ, NOT WHEN IT WAS HANDED OVER. Stamping
+    # "now" on a copy served from cache hides the only thing that makes a cached
+    # answer different from a fresh one: its age. A caller comparing a page to
+    # today's news needs to know they are looking at a copy taken an hour ago —
+    # `via: cache` says a copy, and this says how old.
+    if done.get("via") == "cache" and done.get("read_at"):
+        done["cache_age_s"] = max(0, int(time.time()) - int(done["read_at"]))
+    else:
+        done["read_at"] = int(time.time())
+        done["cache_age_s"] = 0
     # THE MARKER IS CHECKED AGAINST THE FULL TEXT, NOT THE VISIBLE SLICE, and the
     # order here is load-bearing. Slicing the content first and then looking for
     # the marker in what remains turns "not found" into "not in this window" on a
@@ -1327,6 +1455,27 @@ def _parse_page(url: str, final_url: str, code: int, kind: str, body: bytes,
                    total_chars=0, content="")
         return out
     out.update(content=content, total_chars=len(content))
+    # THE DOWNLOAD CEILING IS VISIBLE FOR HTML TOO, not only for PDF. The flag
+    # was computed in the fetch and used in one branch of two, so a page cut at
+    # 2 MB came back as an ordinary complete one: `total_chars` described the
+    # piece we kept, the caller read it as the whole document, and the cursor ran
+    # off the end of a text that does not exist. What is cut must SAY it is cut,
+    # in the same place a caller already looks for such news.
+    if truncated:
+        out["download_truncated"] = True
+        # `total_chars` PROMISES THE SIZE OF THE DOCUMENT, AND WE DO NOT KNOW IT.
+        # The page was cut at the ceiling, so what we have is a floor, not a
+        # total — and a field asserting completeness we never established is the
+        # same defect as a corroboration count of one standing among measured
+        # values. The name goes with the claim: the field that promises the whole
+        # is ABSENT here, and what we actually know arrives under a name that says
+        # "at least".
+        out["total_chars_at_least"] = out.pop("total_chars", None)
+        out["reason"] = ((out.get("reason") + "; ") if out.get("reason") else "") + (
+            f"the page exceeds the download ceiling "
+            f"({DOWNLOAD_CEILING // (1024 * 1024)} MB) and was cut at it: what is "
+            "here is the beginning of the document, not all of it, and its full "
+            "length is unknown")
     return out
 
 
@@ -1341,22 +1490,51 @@ def _slice_out(out: dict, max_chars: int, offset: int) -> None:
     unparseable text — "the module is broken" instead of "the content is
     truncated".
     """
-    total = out.get("total_chars") or 0
+    # THE CURSOR MESSAGE SAYS "of N" ONLY WHEN N IS KNOWN. On a page cut at the
+    # download ceiling there is no total, and printing the floor as a total would
+    # put the lie back into the one sentence a model reads most carefully.
+    total = out.get("total_chars")
+    floor = out.get("total_chars_at_least")
     content = out.get("content") or ""
     if not content:
         out.update(chars=0, offset=offset, truncated=False)
         return
     tail = content[offset:offset + max_chars]
     cut = offset + len(tail) < len(content)
+    # THE END OF WHAT WE DOWNLOADED IS NOT THE END OF THE DOCUMENT. With the page
+    # cut at the download ceiling, the last window of our piece would otherwise
+    # report `truncated: false` — "there is nothing after this" — over tens of
+    # megabytes we never fetched. The reader then stops, believing they have the
+    # whole. `truncated` means "this is not all of it", and with a cut download
+    # that is true at EVERY offset, including the last.
+    if out.get("download_truncated"):
+        cut = True
     if cut:
         # THE CONTINUATION NAMES A TOOL, NOT "THE SAME CALL". "The same call with
         # offset=N" was true while text came only from web_read; with reading
         # inside search the hint started to lie, because web_search has no offset
         # argument at all and the caller would go looking for a handle that does
         # not exist.
-        tail += (f"\n\n[...truncated: characters {offset}-{offset + len(tail)} "
-                  f"of {total} are shown. To continue, call web_read on this "
-                  f"address with offset={offset + len(tail)}]")
+        at_our_end = offset + len(tail) >= len(content)
+        if out.get("download_truncated") and at_our_end:
+            # AND THE CONTINUATION MUST NOT BE OFFERED WHERE IT CANNOT WORK. A
+            # larger offset returns nothing here: the rest was never downloaded,
+            # so pointing the caller at it would send them round a loop that
+            # always looks like "the document ended".
+            tail += (f"\n\n[...truncated: characters {offset}-{offset + len(tail)} "
+                      f"are shown, and that is where OUR COPY ends: the page "
+                      f"exceeds the download ceiling of "
+                      f"{DOWNLOAD_CEILING // (1024 * 1024)} MB and the rest was "
+                      "never fetched. Its full length is unknown, and a larger "
+                      "offset will not return more — fetch the document by "
+                      "another means if you need the whole of it]")
+        else:
+            how_many = (f"of {total}" if total is not None
+                        else (f"of at least {floor}"
+                              if floor is not None else "of an unknown total"))
+            tail += (f"\n\n[...truncated: characters {offset}-{offset + len(tail)} "
+                      f"{how_many} are shown. To continue, call web_read on this "
+                      f"address with offset={offset + len(tail)}]")
     out.update(content=tail, chars=len(tail), offset=offset, truncated=cut)
 
 
@@ -1378,11 +1556,28 @@ def _verify_expect(out: dict, expect: list[str]) -> None:
     out["expected_found"] = all(str(pth).lower() in where for pth in expect)
 
 
+def _png_size(raw: bytes) -> tuple[int | None, int | None]:
+    """(width, height) from a PNG header, or (None, None). Never raises.
+
+    THE FIELDS EXISTED AND WERE ALWAYS NULL — a promise of data nobody filled,
+    which is the module's own cardinal error wearing a shape instead of a value:
+    the caller cannot tell "we did not measure" from "the image has no size".
+    The header carries it in eight bytes at a fixed offset, so measuring is
+    cheaper than explaining the null.
+    """
+    if len(raw) < 24 or raw[:8] != b"\x89PNG\r\n\x1a\n" or raw[12:16] != b"IHDR":
+        return None, None
+    return (int.from_bytes(raw[16:20], "big"), int.from_bytes(raw[20:24], "big"))
+
+
 def _shot_refusal(url: str, reason: str, **extra) -> dict:
     """The full field set on the failure path too, as everywhere in this module."""
     return {"contract": "ag.shot/1", "ok": False, "url": url,
             "shot_taken": False, "png_base64": "", "bytes": 0,
+            # Null HERE is honest: no shot was taken, so there is nothing to
+            # measure — as opposed to a shot whose size we did not bother to read.
             "width": None, "height": None,
+            "arguments_adjusted": [],
             "page_text": "", "page_text_chars": None,
             "page_text_truncated": False,
             "expected": [], "expected_found": None,
@@ -1397,7 +1592,8 @@ SHOT_TEXT_CHARS = int(os.environ.get("SHOT_TEXT_CHARS") or "2000")
 
 
 def screenshot(url: str, expect=None, full_page: bool = False,
-               max_chars: int = SHOT_TEXT_CHARS) -> dict:
+               max_chars: int = SHOT_TEXT_CHARS,
+               adjusted: list | None = None) -> dict:
     """A PNG screenshot of a page. Contract ag.shot/1. Never raises.
 
     WHAT IT IS FOR — NOT FOR SHOWING. It exists so that a result can be COMPARED:
@@ -1487,11 +1683,13 @@ def screenshot(url: str, expect=None, full_page: bool = False,
         "shot_taken": True,
         "png_base64": base64.b64encode(b["png"]).decode("ascii"),
         "bytes": len(b["png"]),
-        "width": None, "height": None,
+        # Read off the PNG header rather than left null: see `_png_size`.
+        "width": _png_size(b["png"])[0], "height": _png_size(b["png"])[1],
         # THE TEXT OF THE SAME VISIT, and its full length beside it. The length
         # is of the WHOLE text, not of the piece returned — otherwise "the page is
         # silent" and "we brought back a little of it" look identical, and a
         # megabyte of image at zero characters is exactly the signal worth seeing.
+        "arguments_adjusted": list(adjusted or []),
         "page_text": text[:max_chars],
         "page_text_chars": len(text),
         "page_text_truncated": len(text) > max_chars,
@@ -1508,6 +1706,11 @@ def _refusal(reason: str, **extra) -> dict:
     return {"contract": CONTRACT, "ok": False, "error": reason,
             "requested": 0, "count": 0, "failed": 0, "results": [],
             "via_used": [], "paths_available": paths(),
+            # AN ARGUMENT WE COULD NOT READ IS NAMED HERE, empty when every one
+            # arrived usable. A NEW FIELD rather than a new shape: an addition
+            # breaks no consumer, so this needs no contract version — unlike
+            # taking a field away, which reads as "nothing happened".
+            "arguments_adjusted": [],
             "all_pages_clean": False, "deadline_hit": False, **extra}
 
 
@@ -1652,7 +1855,8 @@ def read_many(url_list: list[str], max_chars: int = DEFAULT_CHARS,
 
 
 def read(urls, max_chars=DEFAULT_CHARS, offset=0, fmt="markdown",
-         links=False, expect=None, mode="auto", fresh=False) -> dict:
+         links=False, expect=None, mode="auto", fresh=False,
+         adjusted: list | None = None) -> dict:
     """Read pages by address. Contract ag.read/2.
 
     SUCCESS MEANS "EVERY NAMED ADDRESS GOT A NAMED OUTCOME", even when every
@@ -1671,11 +1875,16 @@ def read(urls, max_chars=DEFAULT_CHARS, offset=0, fmt="markdown",
         urls = [urls]           # a single address is accepted as a string: the
                                 # contract asks for an array, but this is far too
                                 # easy to get wrong
+    # THE REFUSAL CARRIES THE ADJUSTMENTS TOO. A caller who mistyped two
+    # arguments at once — an unreadable flag and no address — would otherwise be
+    # told about one of them and left to find the other.
     if not isinstance(urls, (list, tuple)):
-        return _refusal("urls: an array of addresses was expected")
+        return _refusal("urls: an array of addresses was expected",
+                        arguments_adjusted=list(adjusted or []))
     url_list = [str(u).strip() for u in urls if str(u or "").strip()]
     if not url_list:
-        return _refusal("urls: not a single address was given")
+        return _refusal("urls: not a single address was given",
+                        arguments_adjusted=list(adjusted or []))
     surplus = url_list[MAX_URLS:]
     url_list = url_list[:MAX_URLS]
 
@@ -1701,11 +1910,22 @@ def read(urls, max_chars=DEFAULT_CHARS, offset=0, fmt="markdown",
                                       f"the call deadline of {WHOLE_CALL_S:.0f} s expired",
                                       expected=expect))
             continue
-        results.append(_read_one(url, max_chars, offset, fmt, links,
-                                expect, mode, bool(fresh), deadline))
+        # AN UNFORESEEN RAISE STILL PRODUCES AN ANSWER, exactly as on the
+        # parallel path. Without this, one address whose failure we did not
+        # foresee takes down the whole call: the caller gets no status, no
+        # reason and no body — a silence indistinguishable from a hung server.
+        # The parallel path had this guard and its neighbour did not, which is
+        # the harder half of the defect: the same work, two levels of care.
+        try:
+            results.append(_read_one(url, max_chars, offset, fmt, links,
+                                    expect, mode, bool(fresh), deadline))
+        except Exception as exc:  # noqa: BLE001
+            results.append(_blank(url, "unreachable",
+                                  f"{type(exc).__name__}: {exc}"[:160],
+                                  expected=expect))
     for url in surplus:
         # Named but not read. Dropping them silently is not allowed: the client
-        # must SEE that part of the batch was skipped (ag.search/2, "a partial
+        # must SEE that part of the batch was skipped (ag.search/3, "a partial
         # case is not an error").
         results.append(_blank(url, "not_reached",
                                   f"at most {MAX_URLS} addresses are read per "
@@ -1719,6 +1939,8 @@ def read(urls, max_chars=DEFAULT_CHARS, offset=0, fmt="markdown",
         and (r["expected_found"] is not False)
         for r in results)
     return {"contract": CONTRACT, "ok": True, "error": "",
+            # Empty when every argument arrived usable, and never absent.
+            "arguments_adjusted": list(adjusted or []),
             "requested": len(url_list) + len(surplus),
             "count": len(read_ok),
             "failed": len(results) - len(read_ok),

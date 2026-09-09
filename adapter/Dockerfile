@@ -1,4 +1,4 @@
-# The adapter of the web-search module: MCP + ag.search/1 over a metasearch.
+# The adapter of the web-search module: MCP + ag.search/3 over a metasearch.
 #
 # Pinned by tag AND digest rather than latest: a `latest` tag can already point at
 # a build other than the one running, and a single pull would then swap the engine
@@ -62,7 +62,7 @@ RUN pip install --no-cache-dir "pypdfium2==4.30.0" "pillow==11.0.0"
 RUN pip install --no-cache-dir "playwright==1.49.1"
 
 COPY server.py /app/server.py
-# The page reader (ag.read/1). A file of its own rather than a section of
+# The page reader (ag.read/2). A file of its own rather than a section of
 # server.py: the reading policy — per-domain pacing, stub rejection, the chunked
 # cursor — lives beside the measurements that explain it instead of being smeared
 # across routes.

@@ -1,4 +1,4 @@
-# `ag.images/2` — the image-search contract
+# `ag.images/3` — the image-search contract
 
 > **Written from the code.** Every field name and limit below is taken from
 > `adapter/server.py`. If the service stops matching this document, the service
@@ -8,34 +8,44 @@ Status: **implemented**. MCP tool `web_image_search`, plain door `GET /ag/images
 
 ## Contents
 
-What changed against `/1` · Why images are a separate tool · TWO ADDRESSES on one result and why they must
+What changed against `/1` and `/2` · Why images are a separate tool · TWO ADDRESSES on one result and why they must
 not be confused · its own engine pool and its own reference · the shape of the
 answer · the fan-out defect · what is deliberately absent.
 
-## What changed against `/1`, value by value
+## What changed against `/1`
 
-The version number marks THE WIRE DICTIONARY and nothing else. `/1` and `/2`
-carry the same fields, the same shapes and the same guarantees; what changed is
-that the VALUES inside them are English. A caller branches on values, so the
-dictionary is part of the contract — and a changed dictionary under an unchanged
-name would be indistinguishable in a stored answer and in code being read.
+`/1` and `/2` carry the same fields, the same shapes and the same guarantees.
+What changed is the DICTIONARY OF VALUES the fields take, and that is why the
+name changed with it: a caller branches on values, so the dictionary is part of
+the contract, and a changed dictionary under an unchanged name is
+indistinguishable in a stored answer and in code being read.
 
 The break is loud on purpose: an answer says `/2`, and anything expecting `/1`
-fails at once instead of silently matching nothing. If you have `/1` answers in
-storage, this table is how to read them:
+fails at once instead of silently matching nothing.
 
-| field | `/1` | `/2` |
-|---|---|---|
-| `pool_source` | `наблюдение` | `observation` |
-| | `семя` | `seed` |
-| `all_engines_clean` | — | renamed to `all_engines_on_topic` |
+## What changed against `/2`: the shape, not the dictionary
 
-Nothing else moved: no field was added, removed or renamed, apart from `all_engines_clean`. That one is a RENAMED FIELD rather than a
-renamed value, and it was renamed because the name lied: in web search the flag
-is about trust labels earned against references, and image engines have no such
-labels. One name over two meanings is a trap for the caller, and no
-guarantee changed. A `/1` consumer that branched on FIELDS rather than values
-needs only the new value names.
+The same change as in `ag.search/3`, and for the same reason it is a version
+rather than a quiet edit: fields that used to sit at the top level now sit inside
+`trouble`, and an absent field reads as "nothing was wrong" in most languages.
+
+| `/2` | `/3` |
+|---|---|
+| `search_aborted`, `engines_unasked` | `trouble.search_aborted`, `trouble.engines_unasked` |
+| `unresponsive_engines` | `trouble.unresponsive_engines` |
+| `engines_irrelevant` | `trouble.engines_irrelevant` |
+| `pool_source: "seed"` | `trouble.pool_unmeasured`, with the reason |
+
+`trouble` is always present and empty when nothing went wrong. The accounting —
+`count`, `query`, `page`, `engines_skipped`, `pool_source` — comes back with
+`verbose: true`.
+
+**Neighbouring tools name one thing one way.** Image search took this shape in the
+same release as web search, unasked for, because the alternative was two tools
+carrying the same news under different names — a future mistake by the caller,
+and the one defect this contract already exists to prevent in its `image_url` /
+`page_url` pair.
+
 ## Why separate from `web_search`
 
 Not for symmetry. Images have a different subject, different engines and a
@@ -87,14 +97,19 @@ than by the site.
 ## The shape of the answer
 
 Top level: `contract`, `ok`, `error`, `query`, `page`, `count`, `results[]`,
-`engines_asked`, `engines_answered`, `engines_irrelevant`, `engines_skipped`,
-`unresponsive_engines`, `search_aborted`, `engines_unasked`, `pool_source`,
-`all_engines_on_topic`.
+`engines_asked`, `engines_answered`, `all_engines_on_topic`, `trouble`.
+
+`trouble` is empty when nothing went wrong and otherwise holds
+`engines_irrelevant`, `unresponsive_engines`, `search_aborted` with
+`engines_unasked`, `pool_unmeasured` and `arguments_adjusted`. With
+`verbose: true` the accounting comes back beside them: `count`, `query`, `page`,
+`engines_skipped`, `pool_source`.
 
 Per result: `image_url`, `page_url`, `domain`, `page_domain`, `thumbnail`,
 `title`, `author`, `published`, `via`.
 
-`pool_source` says whether the pool was COMPUTED from observation or handed back
+`pool_source` (under `verbose`; its bad state travels as `trouble.pool_unmeasured`)
+says whether the pool was COMPUTED from observation or handed back
 as the seed list: when observations are insufficient the pool is not invented —
 the seed is returned and it is named. The failure direction is the module's own:
 no data means "not checked", never "sound".
@@ -106,8 +121,8 @@ is no easier to cure than a complete one.
 **Deferred, with the condition for coming back to it: image references.** Trust
 is earned against references, and every reference the prober runs is a WEB query;
 there are none for the image category, so no image engine has a label and the
-image pool runs on its seed to this day — which `pool_source` states in every
-answer rather than hiding. The two follow from one piece of work: when image
+image pool runs on its seed to this day — which `trouble.pool_unmeasured` states
+in every answer rather than hiding. The two follow from one piece of work: when image
 references exist, the pool becomes computed from observation and a trust flag can
 join the one below. Until then, nothing here pretends to be measured.
 
@@ -132,4 +147,4 @@ paying a model for every result in a result set.
 
 **No filters by size or licence.** Not every engine returns them, and a field
 filled in for a third of the results reads as "the rest are unrestricted" —
-exactly the blind spot `ag.search/2` is written against.
+exactly the blind spot `ag.search/3` is written against.

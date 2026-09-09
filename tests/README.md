@@ -19,7 +19,7 @@ always computes the same thing passes any check of the form "the pool is
 non-empty" and never notices an engine degrading — the very thing it exists for.
 
 ```bash
-IMAGE=ag-mod-search/adapter:0.2.1 bash tests/in-image.sh
+IMAGE=ag-mod-search/adapter:0.3.0 bash tests/in-image.sh
 ```
 
 They run inside the module image, because the PDF parser lives there. Run
@@ -27,9 +27,11 @@ outside, the PDF checks go red with a note saying where to run them — the skip
 never silent, because a green run that checked nothing is exactly the defect
 these suites look for.
 
-**Not one of them makes an outbound request.** For reading that matters more than
-for search: a test that went to the internet would spend the very resource the
-tool protects — the reputation of the single address it calls from.
+**Not one of them makes an outbound request, and the runner enforces it.** The
+suites run with `--network none`, so a check that reached for the internet would
+fail here rather than in somebody else's log. For reading this matters more than
+for search: a test that went outside would spend the very resource the tool
+protects — the reputation of the single address it calls from.
 
 ## What these suites do NOT check
 

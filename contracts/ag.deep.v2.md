@@ -9,43 +9,22 @@ Status: **implemented**. MCP tool `web_deep_search`, plain door `GET /ag/deep`.
 ## Contents
 
 What changed against `/1` · How this tool differs from the two beside it · markers, the single point of
-failure of the whole verification apparatus · the five outcomes · ambiguity, and
+failure of the whole verification apparatus · the six outcomes · ambiguity, and
 why a mechanism finds it rather than a model · the shape of the answer · what is
 visible about cost and time · what has been measured and what the measurement
 does not say.
 
-## What changed against `/1`, value by value
+## What changed against `/1`
 
-The version number marks THE WIRE DICTIONARY and nothing else. `/1` and `/2`
-carry the same fields, the same shapes and the same guarantees; what changed is
-that the VALUES inside them are English. A caller branches on values, so the
-dictionary is part of the contract — and a changed dictionary under an unchanged
-name would be indistinguishable in a stored answer and in code being read.
+`/1` and `/2` carry the same fields, the same shapes and the same guarantees.
+What changed is the DICTIONARY OF VALUES the fields take, and that is why the
+name changed with it: a caller branches on values, so the dictionary is part of
+the contract, and a changed dictionary under an unchanged name is
+indistinguishable in a stored answer and in code being read.
 
 The break is loud on purpose: an answer says `/2`, and anything expecting `/1`
-fails at once instead of silently matching nothing. If you have `/1` answers in
-storage, this table is how to read them:
+fails at once instead of silently matching nothing.
 
-| field | `/1` | `/2` |
-|---|---|---|
-| `outcome` | `исход` was the KEY; its values were already English | `outcome` |
-| `sources[]` | `источники` | `sources` |
-| | `спрошено` | `queries_asked` |
-| | `не_вышло` | `queries_failed` |
-| | `пусто_по` | `queries_empty` |
-| | `ссылок` | `links_found` |
-| `ambiguity` | `варианты` | `variants` |
-| | `один_предмет` | `same_subject` |
-| | `ответ` | `answer` |
-| | `оборван` | `truncated` |
-| | `сведено_по` | `digested_from` |
-| | `основание` | `basis` |
-| | `сведено_по_годным` | `from_on_target` |
-| `read_status`, `stub_check`, `text_source` in `sources[]` | as in `ag.read/1` | as in `ag.read/2` |
-
-Nothing else moved: no field was added, removed or renamed, and no
-guarantee changed. A `/1` consumer that branched on FIELDS rather than values
-needs only the new value names.
 ## One tool of three, and the line is drawn
 
 | tool | what it does | what it returns |
@@ -100,15 +79,23 @@ Three consequences, all implemented:
    only in a field. Honesty hidden in a field is honesty nobody reads: to notice
    `markers: []` you must already know which field to look at.
 
-## The five outcomes
+## The six outcomes
 
 | `outcome` | what happened |
 |---|---|
 | `found` | the markers met on at least one page |
 | `ambiguous` | the sources hold SEVERAL DIFFERENT subjects under this name |
 | `off_target` | material was found, but about another subject — a namesake, another city |
-| `not_found` | not one non-empty source |
+| `not_found` | we looked and not one source came back non-empty |
 | `unknown` | there were no markers, so there was nothing to check with — "not verified", not "not found" |
+| `not_attempted` | the search never ran: no model is configured, or the question was empty. `error` says which |
+
+**`not_attempted` is separate from `not_found` for the reason this contract
+exists.** "We looked and found nothing" and "we never looked" are different news,
+and a caller branching on `outcome` would otherwise be handed the module's own
+cardinal error — an absence of data reported as a finding. The distinction cannot
+be derived from the corpus, because in this case there is no corpus; it is set
+where the refusal is made.
 
 **There are no thresholds on corpus size, and that is a decision.** Two runs of
 one question differed twofold in characters (237932 against 190275). A threshold

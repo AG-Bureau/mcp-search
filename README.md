@@ -79,8 +79,49 @@ on stderr. One stray line of anything else breaks the client reading it.
 
 The sidecars do not depend on the choice. Started by a client with no compose
 project around it, the module still works and names what is missing instead of
-pretending: the browser path reports `not_wired_up`, and the engine pool comes
-back as `pool_source: seed`.
+pretending: the browser path reports `not_wired_up`, and `trouble` carries
+`pool_unmeasured` — the engine pool was never computed from observation.
+
+## ⬆️ Upgrading from 0.2.x — the answer changed shape
+
+**If you already run 0.2.1 or earlier, read this before updating.** Nothing here
+is a new feature you may ignore; it is what your existing calls will return
+differently.
+
+**The search and image answers carry fewer fields by default**, and they say so
+in their name: `ag.search/3` and `ag.images/3` instead of `/2`. A caller that
+branched on `contract` will break loudly, which is the intent — a field that
+simply vanished would read as "nothing was wrong" in most languages.
+
+| in 0.2.x | in 0.3 |
+|---|---|
+| `search_aborted`, `engines_unasked` | `trouble.search_aborted`, `trouble.engines_unasked` |
+| `unresponsive_engines` | `trouble.unresponsive_engines` |
+| `engines_irrelevant` | `trouble.engines_irrelevant` |
+| `pool_source: "seed"` | `trouble.pool_unmeasured`, with the reason |
+| `arguments_adjusted` | `trouble.arguments_adjusted` |
+| `corroborated_by_url`, `corroborated_by_domain` — always present, `1` on the cheap path | absent when only one engine found results: there `1` meant "nobody else was asked", not a measurement |
+| `count`, `query`, `page`, `read`, `read_top`, `pages_*`, `timing_ms`, `engines_skipped`, `engines_used`, `tiers_used`, `pool_source`, `pool_reason` | returned when you ask: `verbose: true` |
+
+`trouble` is always present and empty when nothing went wrong, so `if not
+trouble` replaces the four separate checks. Nothing was deleted from the module —
+the accounting moved behind a request.
+
+**Booleans are now parsed rather than cast.** In 0.2.x `"read": "false"` over MCP
+read the pages anyway — eight times the wall clock — while the plain door
+understood the same word correctly. Both doors now accept `true/false`, `1/0`,
+`yes/no`, `on/off`, `y/n`, `t/f` and Python's `True/False`, case-blind. **A value that cannot be read
+turns the flag off and is named in `arguments_adjusted`**, and an EMPTY value
+counts as unreadable: `read=""` no longer buys the expensive default in silence.
+
+**`read_top: 0` means "no preference"**, not "read nothing" — for nothing, use
+`read: false`. The schema used to declare `minimum: 1` while accepting zero.
+
+The full value-by-value history, including the Russian field values of `/1`, is
+in the contracts: [`contracts/ag.search.v3.md`](contracts/ag.search.v3.md) and
+[`contracts/ag.images.v3.md`](contracts/ag.images.v3.md), section "What changed".
+Reading (`ag.read/2`), deep search (`ag.deep/2`) and screenshots (`ag.shot/1`)
+kept their numbers: they gained fields, and an addition breaks nobody.
 
 ## ⚙️ Configuration
 
@@ -116,7 +157,14 @@ your back in a search.
 | `read_top: 3`, 6 links | 9.8 KB | 6.3 s | **0** |
 | `web_deep_search` | full account | 36 s | 6 calls |
 
-*Measured on one machine, one query. Take the shape, not the digits.*
+*Measured on one machine, one query. Take the shape, not the digits.* A consumer
+measured the same fork from outside and got 4.8-10.5 s against 0.7 s — the shape
+holds, the digits depend on the pages the query happens to find.
+
+**The choice is made before the call, not after the bill.** `read: false` when
+you are mapping what exists or working under a narrow context ceiling; the
+default when you want the text of the top results and would otherwise fetch it
+yourself. `read_top: 0` means "no preference", not "read nothing".
 
 **The engine list maintains itself.** A hand-written list goes stale in silence:
 an engine that was the best returns nothing weeks later and says nothing about it.
@@ -131,20 +179,40 @@ planted bad run took an engine out of the pool **with no code change**, and
 restoring the run brought it back by itself.
 
 Until enough observation accumulates, the pool is a seed list and every answer
-says so in `pool_source`.
+says so: `trouble.pool_unmeasured` by default, `pool_source` itself under
+`verbose`.
 
 **Failure is distinguishable from success.** Four ways an engine can fail, and
 what shows each:
 
 | how it fails | what shows it |
 |---|---|
-| answers with a refusal: captcha, rate limit, ban | `unresponsive_engines` |
+| answers with a refusal: captcha, rate limit, ban | `trouble.unresponsive_engines` |
 | silently returns nothing | the difference between `engines_asked` and `engines_answered` |
-| answers a different question | `engines_irrelevant` — its results are already discarded |
+| answers a different question | `trouble.engines_irrelevant` — its results are already discarded |
 | substitutes the subject with a better-indexed namesake | `engines_trust`, earned against references |
 
 The same applies to reading: seven distinct outcomes, and a page that returned a
 shield is `stub`, not empty text.
+
+## ⚖️ What it does with `robots.txt`, and why you must decide
+
+**The module REPORTS a site's rules and does not enforce them.** Every read
+carries `robots`: `allowed`, `disallowed_by_site`, or `not_checked` when the file
+could not be read. A page a site forbids is still fetched, and the answer says so.
+
+That is a decision, not an omission, and it belongs to whoever runs this rather
+than to the module. Two reasons. Whether a tool called by a person obeys
+robots.txt is the operator's call — a rule written for crawlers indexing the web
+is not obviously a rule for fetching one page a user asked for. And the reference
+behaviour — treat `401`/`403` on robots.txt as a ban — produces false bans on
+ordinary sources, because the same sites answer `401` to everyone from behind an
+anti-bot service.
+
+**So the gate is yours to add.** If your use requires obeying robots, branch on
+the field: `robots == "disallowed_by_site"` means the site says no. If you obey
+it, treat `not_checked` as a stop too — it means we could not read the rules, not
+that there are none.
 
 ## 📖 How it works
 
@@ -154,6 +222,9 @@ shield is `stub`, not empty text.
 - **[measures/](measures/)** — dated measurements: which engines were alive, what
   the load ladder gives, what the transport change bought. Numbers, with what was
   measured and when.
+- **[contracts/ag.search.v3.md](contracts/ag.search.v3.md)** — and its
+  neighbours: what each capability promises, plus the table of what changed
+  against `/1` and `/2` for anyone with stored answers to read.
 
 ## 🔒 Deployment and exposure
 
@@ -169,12 +240,13 @@ the machine owner's name.
 ## ✅ Tests
 
 ```bash
-IMAGE=ag-mod-search/adapter:0.2.1 bash tests/in-image.sh
+IMAGE=ag-mod-search/adapter:0.3.0 bash tests/in-image.sh
 ```
 
 Three suites — the protocol and search against a fake metasearch, reading against
 a fake site, the computed pool against a database built in memory. **Not one of
-them makes a single outbound request**: for reading that matters more than for
+them makes a single outbound request**, and the runner holds that with
+`--network none` rather than on trust: for reading it matters more than for
 search, because a test that went to the internet would spend the very resource
 the tool protects — the reputation of the one address it calls from.
 
@@ -191,7 +263,7 @@ What these suites cannot check is written down in
 A capability, engine or heuristic is not accepted until its **reference
 attribute** is declared — a property of the correct answer that the thing being
 tested could not have told us itself — and a pool of checked questions is
-attached. See [CONTRIBUTING](https://github.com/AG-Bureau/.github/blob/main/CONTRIBUTING.md).
+attached. See [CONTRIBUTING](https://github.com/AG-Bureau/.github/blob/main/.github/CONTRIBUTING.md).
 
 ## 📄 License
 

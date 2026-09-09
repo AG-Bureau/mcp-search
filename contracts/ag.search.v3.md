@@ -1,4 +1,4 @@
-# `ag.search/2` — the web-search provider contract
+# `ag.search/3` — the web-search provider contract
 
 > **Written from the code.** Every field name, value and limit below is taken
 > from `adapter/server.py`. If the service stops matching this document, the
@@ -13,48 +13,75 @@ two produces a document that is half promise and half plumbing.
 
 ## Contents
 
-What changed against `/1` · Why the policy lives in the module · the interface · the three engine fields that
+What changed against `/1` and `/2` · Why the policy lives in the module · the interface · the three engine fields that
 are always present · the four ways an engine fails · what counts as success ·
 failure direction · what corroboration does and does not mean.
 
-## What changed against `/1`, value by value
+## What changed against `/1`
 
-The version number marks THE WIRE DICTIONARY and nothing else. `/1` and `/2`
-carry the same fields, the same shapes and the same guarantees; what changed is
-that the VALUES inside them are English. A caller branches on values, so the
-dictionary is part of the contract — and a changed dictionary under an unchanged
-name would be indistinguishable in a stored answer and in code being read.
+`/1` and `/2` carry the same fields, the same shapes and the same guarantees.
+What changed is the DICTIONARY OF VALUES the fields take, and that is why the
+name changed with it: a caller branches on values, so the dictionary is part of
+the contract, and a changed dictionary under an unchanged name is
+indistinguishable in a stored answer and in code being read.
 
 The break is loud on purpose: an answer says `/2`, and anything expecting `/1`
-fails at once instead of silently matching nothing. If you have `/1` answers in
-storage, this table is how to read them:
+fails at once instead of silently matching nothing.
 
-| field | `/1` | `/2` |
-|---|---|---|
-| `engines_trust` | `чист` | `clean` |
-| | `кандидат` | `candidate` |
-| | `подменяет` | `substitutes` |
-| | `недоступен` | `unavailable` |
-| | `не проверялся` | `not_checked` |
-| `pool_source` | `наблюдение` | `observation` |
-| | `семя` | `seed` |
-| `read_status` | `прочитано` | `read` |
-| | `пусто` | `empty` |
-| | `заглушка` | `stub` |
-| | `отказ` | `refused` |
-| | `не открылась` | `unreachable` |
-| | `запрещено` | `forbidden` |
-| | `не дошли` | `not_reached` |
-| | `не читалась` | `not_read` |
-| `stub_check` | `чисто` | `clean` |
-| | `похоже на заглушку` | `looks_like_stub` |
-| | `не проверялось` | `not_checked` |
-| `text_source` | `текстовый слой` | `text_layer` |
-| | `распознано` | `recognised` |
+## What changed against `/2`: the shape, not the dictionary
 
-Nothing else moved: no field was added, removed or renamed, except that `pool_source` and `arguments_adjusted` are new in `/2`, and no
-guarantee changed. A `/1` consumer that branched on FIELDS rather than values
-needs only the new value names.
+`/2` renamed the values; `/3` changes WHICH FIELDS ARRIVE BY DEFAULT. The values
+are untouched, so the table above still reads a `/2` answer.
+
+The ground is a measurement taken by a consumer ON US: twenty-five fields at the
+top level, seven ever touched, ONE branched on. The rest arrived on every call
+and took room from a client with a narrow observation ceiling.
+
+**Four of them were not deletable, and they are why this contract exists**: an
+aborted sweep, engines that stayed silent, engines discarded as off topic, and a
+pool that was never measured. They say the answer is incomplete BY NO DECISION OF
+OURS. A consumer failing to read a field and the field not being there are
+different things, and the first is cured by making it visible.
+
+So they collapse into `trouble` rather than disappearing:
+
+| `/2` | `/3` |
+|---|---|
+| `search_aborted`, `engines_unasked` | `trouble.search_aborted`, `trouble.engines_unasked` |
+| `unresponsive_engines` | `trouble.unresponsive_engines` |
+| `engines_irrelevant` | `trouble.engines_irrelevant` |
+| `pool_source: "seed"` | `trouble.pool_unmeasured`, with the reason |
+| `arguments_adjusted` | `trouble.arguments_adjusted` |
+| `corroborated_by_url`, `corroborated_by_domain` (always present, `1` on the cheap path) | absent unless at least two engines found results |
+
+**`corroborated_by_url` and `corroborated_by_domain` are ABSENT when there was
+only one witness.** In `/2` they were always there, and on the cheap path they
+were always `1` — where the sweep stops at the first engine that gives enough
+links, one is not a measurement but "nobody else was asked". The same `1` on a
+wide sweep means "three engines asked, one found it". Two different pieces of
+news under one number, standing next to `engines_trust` and reading as measured.
+
+This is the one place where an ABSENT field is the right form: with a single
+witness the question "how many independently found it" was never put. Who was
+asked is in `engines_asked`, and who failed to answer is in `trouble`. Ask for
+width with `min_engines` and the fields come back, now meaning something.
+
+**`trouble` is ALWAYS present and empty when nothing went wrong.** `if not
+trouble` is the whole of the good case. An empty dictionary means "checked, all
+well"; an absent key would mean "this side was not examined at all", which is
+different news and must not share a shape with it.
+
+Everything else that only explains the call — `count`, `query`, `page`, `read`,
+`read_top`, `pages_read`, `pages_empty`, `pages_failed`, `timing_ms`,
+`engines_skipped`, `engines_used`, `tiers_used`, `pool_source`, `pool_reason` —
+is returned when you ask: `verbose: true` (or `&verbose=1` on the plain door).
+Nothing was removed from the module; it moved behind a request.
+
+**Why a version number for this at all.** A consumer that read `search_aborted`
+would find it absent and, in most languages, read the absence as "nothing was
+aborted" — a silent false negative, which is precisely the failure direction this
+module refuses. Better a loud break for one caller than a quiet lie to all.
+
 ## Why the engine-selection policy belongs to the module
 
 A caller that keeps its own list of engines, its own batch size and its own
@@ -77,13 +104,14 @@ never noticed at all.
 GET {base_url}/ag/search?q=<query>&n=<how many>&page=<0,1,2…>
 ```
 
-Also accepted: `read` (default true), `read_top`, `min_engines`, `per_engine`.
+Also accepted: `read` (default true), `read_top` (0 means "no preference"),
+`min_engines`, `per_engine`, `verbose`.
 
 ```json
 {
-  "contract": "ag.search/2",
+  "contract": "ag.search/3",
   "ok": true,
-  "count": 6,
+  "error": "",
   "results": [
     {"title": "…", "url": "https://…", "snippet": "…", "domain": "example.com",
      "via": "engine-a, engine-b",
@@ -93,32 +121,65 @@ Also accepted: `read` (default true), `read_top`, `min_engines`, `per_engine`.
   ],
   "engines_asked":        ["engine-a", "engine-b", "engine-c"],
   "engines_answered":     ["engine-a", "engine-c"],
-  "unresponsive_engines": [],
-  "engines_irrelevant":   ["engine-b"],
-  "engines_skipped":      [],
-  "engines_unasked":      [],
   "engines_trust":        {"engine-a": "clean", "engine-c": "not_checked"},
   "all_engines_clean":    false,
-  "search_aborted":       "",
-  "pool_source":          "observation",
-  "pool_reason":          "…",
-  "arguments_adjusted":   [],
-  "pages_read": 3, "pages_empty": 0, "pages_failed": 0,
-  "timing_ms": {"search_ms": 412, "read_ms": 3908}
+  "trouble":              {}
 }
 ```
 
-**`pool_source` says where the engine list came from**: `observation` — the
-pool was computed from probes; `seed` — there were not enough of them, so the
-starting list was returned AND NAMED. The pool is never invented, and the failure direction is
-the module's own: no data means "not checked", never "sound". `pool_reason`
-carries it in words.
+That is the whole default answer: nine fields, and `if not trouble` is the good
+case. With `verbose: true` the accounting comes back beside them —
+`count`, `query`, `page`, `read`, `read_top`, `pages_read`, `pages_empty`,
+`pages_failed`, `timing_ms`, `engines_skipped`, `engines_unasked`,
+`engines_used`, `tiers_used`, `pool_source`, `pool_reason`, plus the raw
+`search_aborted`, `unresponsive_engines`, `engines_irrelevant` and
+`arguments_adjusted` that `trouble` is built from.
 
-**`arguments_adjusted` is empty when every argument arrived usable, and never
-absent.** Numbers out of range are clamped and rubbish falls back to a default —
-but silently, that is the module answering a question other than the one asked.
-Each adjustment is named here: `n='many' is not a number, using 6`, `page=99999
-clamped to 10000`.
+**`trouble` when something did go wrong:**
+
+```json
+{
+  "trouble": {
+    "search_aborted": "metasearch stopped answering: ConnectionError",
+    "engines_unasked": ["engine-c"],
+    "unresponsive_engines": [["engine-b", "captcha"]],
+    "engines_irrelevant": ["engine-d"],
+    "pool_unmeasured": "not enough observations, the seed list was returned",
+    "arguments_adjusted": ["n='many' is not a number, using 6"]
+  }
+}
+```
+
+Each key names a different kind of "less than it looks": the sweep stopped
+mid-way and these engines were never asked; this one was asked and stayed silent;
+this one answered about something else and its results are already discarded; the
+engine pool is the starting list rather than a measured one; and we answered a
+slightly different question than the one asked, because an argument was unusable.
+
+**`pool_unmeasured` rather than `pool_source` in `trouble`.** A field with a
+legitimately fine value cannot live in a place whose emptiness means "all well" —
+`observation` is the healthy state, so only the unmeasured case enters, under a
+name that says what is wrong. `pool_source` itself is still there under `verbose`.
+
+**`arguments_adjusted` is never silent.** Numbers out of range are clamped and
+rubbish falls back to a default — silently, that would be the module answering a
+question other than the one asked. `read_top: 0` is NOT such a case: zero means
+"no preference" and is documented as the default's name, not an adjustment.
+
+**Booleans are parsed, not cast, and identically at both doors.** Understood:
+`true/false`, `1/0`, `yes/no`, `on/off`, `y/n`, `t/f` and Python's `True/False`,
+case-blind. JSON `null` is a PASSED value, not an absence: it is unreadable like
+any other, while an argument nobody sent keeps its default in silence.
+A value that cannot be read **turns the flag off** and is named here — not
+because off is the default (for `read` it is not) but because every flag here
+buys something expensive when on, and a refusal must fall to the cheap side.
+Measured before the fix: `"read": "false"` over MCP read the pages anyway, at
+eight times the wall clock and seven times the payload, with nothing said.
+
+An ABSENT argument keeps its documented default and is not reported — nobody
+made a mistake. An EMPTY one is a value we could not read, and is treated like
+any other unreadable value. Collapsing the two hid the expensive case: `""` used
+to take the default, and for `read` the default is the costly side.
 
 **Search reads by default.** The top `read_top` results (3 unless asked
 otherwise) are fetched and their text arrives in `content`. `read: false` returns
@@ -138,8 +199,10 @@ Mandatory fields, and why each is mandatory:
   broken".
 * `via` — which engines produced this link. It shows what an instance is still
   alive on and what it is not.
-* `page` — from zero. A module that cannot paginate returns the first page again;
-  the caller de-duplicates by address.
+* `page` — from zero, echoed under `verbose`. A module that cannot paginate
+  returns the first page again; the caller de-duplicates by address.
+* `trouble` — present in every answer, success and refusal alike. Empty means
+  checked and clean.
 
 ## The engine fields are always present, empty ones included
 

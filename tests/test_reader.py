@@ -14,6 +14,7 @@ legacy encoding with no declaration, a JS application.
 """
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import sys
@@ -113,6 +114,29 @@ PAGES: dict[str, tuple[int, str, bytes]] = {
                   + " ".join(f"fragment{i:05d}" for i in range(4000))
                   + "</p></body></html>").encode("utf-8")),
     "/robots.txt": (200, "text/plain", "User-agent: *\nDisallow: /disallowed\n".encode("utf-8")),
+    # A SMALL COMPRESSED BODY THAT UNPACKS PAST THE CEILING. Measuring the limit
+    # on the compressed size and cutting the unpacked one makes a page come back
+    # as "read, whole" with megabytes silently gone.
+    "/inflates": (200, "text/html; charset=utf-8",
+                  gzip.compress(("<html><body><p>"
+                                 + "word " * 700_000
+                                 + "</p></body></html>").encode("utf-8")), "gzip"),
+    # PACKING THAT CANNOT BE UNPACKED — a truncated or broken stream. Handing the
+    # raw bytes on as content puts binary rubbish into `content` under
+    # `status: read`.
+    "/broken-gzip": (200, "text/html; charset=utf-8",
+                     b"\x1f\x8b\x08\x00broken not really gzip at all", "gzip"),
+    # AN ENCODING WE NEVER ASKED FOR. We announce gzip and deflate; a server may
+    # answer `br` anyway, and passing those bytes on unchanged puts a compressed
+    # stream into `content` under `status: read`.
+    "/brotli": (200, "text/html; charset=utf-8",
+                b"\x1b\x2c\x00\x00brotli-ish bytes that are not html", "br"),
+    # THE SAME FILE, SENT COMPRESSED — which a site is entitled to do, because we
+    # announce `Accept-Encoding: gzip, deflate`. Read without unpacking, it is
+    # rubbish, `Disallow` is not found in it, and the verdict comes back
+    # `allowed`: the ban exists, we cannot see it, and we say out loud that we
+    # may. For a module claiming to be polite that is the worst silent failure.
+
     "/disallowed/here": (200, "text/html; charset=utf-8",
                      ("<html><body><p>" + LONG_TEXT + "</p></body></html>").encode("utf-8")),
 }
@@ -128,6 +152,46 @@ class Site(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urllib.parse.unquote(urllib.parse.urlparse(self.path).path)
         HITS.append(path)
+        # LEGITIMATE PATHOLOGY, WHICH THE FIXTURE COULD NOT PRODUCE BEFORE. It
+        # served what was asked for, at the right length, uncompressed, at once —
+        # that is, only the failures we had already thought of. A trial is never
+        # stricter than the imagination of whoever built it, so these four come
+        # from what live sites actually do, not from what we expected them to.
+        if path == "/drip":
+            # A byte a second: the connection is healthy and the data flows, so
+            # no timeout that measures WAITING ever fires.
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", "100000")
+            self.end_headers()
+            try:
+                for _ in range(100_000):
+                    self.wfile.write(b"x")
+                    self.wfile.flush()
+                    time.sleep(1)
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        if path == "/says-more":
+            # Content-Length LARGER than what is actually sent.
+            body = b"<html><body><p>" + b"short. " * 20 + b"</p></body></html>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body) + 5000))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if path == "/says-less":
+            # Content-Length SMALLER than what is sent: a client that trusts the
+            # header stops early and reports a page that is not the page.
+            body = ("<html><body><p>" + "sentence. " * 400
+                    + "</p></body></html>").encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", "40")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         # REDIRECTS. They exist for the defect where the address check sits at the
         # entrance while the download follows 3xx with a plain opener — letting
         # another site send us inside the perimeter. Where to lead is set by the
@@ -141,10 +205,16 @@ class Site(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
-        code, kind, msg_body = PAGES.get(path, (404, "text/html", b"<html><body>"
-                                             b"<p>Page not found</p></body></html>"))
+        entry = PAGES.get(path, (404, "text/html", b"<html><body>"
+                                 b"<p>Page not found</p></body></html>"))
+        # A fourth element, when present, is the Content-Encoding: a site may
+        # answer compressed, and the tests must be able to say so.
+        code, kind, msg_body = entry[0], entry[1], entry[2]
+        encoding = entry[3] if len(entry) > 3 else ""
         self.send_response(code)
         self.send_header("Content-Type", kind)
+        if encoding:
+            self.send_header("Content-Encoding", encoding)
         self.send_header("Content-Length", str(len(msg_body)))
         self.end_headers()
         self.wfile.write(msg_body)
@@ -202,6 +272,30 @@ def main() -> int:
     site = ThreadingHTTPServer(("127.0.0.1", 0), Site)
     threading.Thread(target=site.serve_forever, daemon=True).start()
     API_BASE = f"http://127.0.0.1:{site.server_address[1]}"
+
+    # A SECOND SITE, WHOSE robots.txt IS COMPRESSED. It needs a host of its own
+    # because robots.txt is fetched from the ROOT: a copy under a sub-path is
+    # never read, and a test that puts it there proves nothing. A site is
+    # entitled to answer compressed — we announce that we accept it — and read
+    # without unpacking the file becomes rubbish in which `Disallow` is never
+    # found.
+    class GzSite(Site):
+        def do_GET(self):
+            path = urllib.parse.urlparse(self.path).path
+            if path == "/robots.txt":
+                body = gzip.compress(b"User-agent: *\nDisallow: /closed\n")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Encoding", "gzip")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            Site.do_GET(self)
+
+    gz_site = ThreadingHTTPServer(("127.0.0.1", 0), GzSite)
+    threading.Thread(target=gz_site.serve_forever, daemon=True).start()
+    GZ_BASE = f"http://127.0.0.1:{gz_site.server_address[1]}"
 
     def read_at(path, **kw):
         reader._reset_rate()
@@ -420,8 +514,15 @@ def main() -> int:
         r = one_page(path)
         check(f"all 27 fields are returned on the {r['status']} path too",
                  set(r) >= fields, sorted(fields - set(r)))
-    r = reader.read(["http://10.0.0.5/x"])["results"][0]
-    check("all 27 fields are returned on a refusal too", set(r) >= fields, sorted(fields - set(r)))
+    # A REFUSAL, NOT A TIMEOUT. With the test gate open an internal address is
+    # ATTEMPTED and comes back twenty seconds later as `unreachable` — so this
+    # line used to check the field set of a network failure while claiming to
+    # check a refusal, and it cost twenty seconds a run to do it. A foreign
+    # scheme is refused at the gate, instantly and for a reason of ours.
+    r = reader.read(["ftp://example.org/x"])["results"][0]
+    check("all 27 fields are returned on a refusal too (a real one, at the gate)",
+             r["status"] == "forbidden" and set(r) >= fields,
+             (r["status"], sorted(fields - set(r))))
     check("contract is named", reader.read([])["contract"] == "ag.read/2")
     check("paths_available tells the truth about the browser",
              reader.paths()["browser"] == "not_wired_up", reader.paths())
@@ -812,6 +913,114 @@ def main() -> int:
         check("the dpi ladder is checked in the image (no renderer here)", False,
                  "run tests/in-image.sh")
 
+    print("\n== the ceiling describes what the CALLER got, not what came off the wire ==")
+    # THE LIMIT WAS MEASURED BEFORE UNPACKING AND APPLIED AFTER IT: a 300 KB
+    # compressed page that unpacks to 5 MB reported `truncated: false` while
+    # three megabytes were cut, and the cursor ran into nothing.
+    r = one_page("/inflates", max_chars=2000)
+    check("a page that unpacks past the ceiling is MARKED as cut",
+             r["status"] == "read" and r.get("download_truncated") is True
+             and "ceiling" in (r.get("reason") or ""),
+             (r["status"], r.get("download_truncated"), (r.get("reason") or "")[:60]))
+    check("and a page that fits says so, rather than saying nothing",
+             one_page("/ok").get("download_truncated") is False,
+             one_page("/ok").get("download_truncated"))
+    # THE FIELD THAT PROMISES A TOTAL IS ABSENT HERE, and a floor takes its place:
+    # the page was cut at the ceiling, so we know a lower bound and not a size.
+    # A number under the old name would assert completeness we never established.
+    check("no field claims the document's size when the document was cut",
+             "total_chars" not in r and r.get("total_chars_at_least"),
+             (r.get("total_chars"), r.get("total_chars_at_least")))
+    # AND THE TAIL OF OUR PIECE IS NOT THE END OF THE DOCUMENT. Reading to the
+    # edge of what we downloaded used to answer `truncated: false` — "nothing
+    # follows" — over the megabytes never fetched, and the reader stopped there.
+    tail = one_page("/inflates", max_chars=400, offset=reader.DOWNLOAD_CEILING - 600)
+    check("at the end of our copy the answer still says it is not all",
+             tail.get("truncated") is True, (tail.get("truncated"), tail.get("chars")))
+    check("and it does not offer an offset that cannot work",
+             "never fetched" in (tail.get("content") or ""),
+             (tail.get("content") or "")[-160:])
+    # THREE OUTCOMES, NOT TWO: fitted, cut, and "we could not unpack it". The
+    # third used to arrive as `read` with compressed bytes in `content`.
+    r = one_page("/brotli")
+    check("an encoding we cannot decode is not called decoded",
+             r["status"] != "read" and "gzip and deflate" in (r.get("reason") or ""),
+             (r["status"], (r.get("reason") or "")[:80]))
+    check("and its bytes do not reach content",
+             not (r.get("content") or ""), repr((r.get("content") or "")[:30]))
+    r = one_page("/broken-gzip")
+    check("packing we cannot unpack is a NAMED failure, not text",
+             r["status"] != "read" and "unpack" in (r.get("reason") or ""),
+             (r["status"], (r.get("reason") or "")[:70]))
+    check("and no raw bytes are passed off as content",
+             not (r.get("content") or ""), repr((r.get("content") or "")[:40]))
+
+    print("\n== legitimate pathology: slow, and lying about its own length ==")
+    # A PAGE THAT DRIPS. 380 seconds against a declared 90-second ceiling, and no
+    # answer at all — measured on a trap. Nothing waits, so nothing times out:
+    # the bound has to be on the whole download, not on the pause inside it.
+    was_timeout = reader.TIMEOUT_S
+    try:
+        reader.TIMEOUT_S = 3.0        # the rule is the same at any ceiling
+        began = time.time()
+        r = one_page("/drip")
+        took = time.time() - began
+        check("a dripping page ENDS, and near the declared ceiling",
+                 took < reader.TIMEOUT_S + 5, f"{took:.1f}s")
+        check("and it is a named refusal, not a piece passed off as the page",
+                 r["status"] == "unreachable" and "still arriving" in r["reason"],
+                 (r["status"], r["reason"][:70]))
+        check("no partial text is handed over as content",
+                 not (r.get("content") or ""), repr((r.get("content") or "")[:40]))
+    finally:
+        reader.TIMEOUT_S = was_timeout
+    # A HEADER THAT LIES ABOUT THE LENGTH, both ways. Live sites do this; a
+    # client that believes the number returns a page that is not the page.
+    # A HEADER SMALLER THAN THE BODY. We stop where the header says, and that is
+    # right: the length is what the response declares itself to be, and reading
+    # past it is where request smuggling lives. What matters is that we do not
+    # then CLAIM a document: the caller must see how little arrived, and the
+    # thinness rule — every page under 1200 characters in a 141-page corpus was a
+    # block, an error or a JS shell — must not be skipped because a header said
+    # the page was fine.
+    r = one_page("/says-less")
+    check("Content-Length smaller than the body: we take what it declares",
+             r["status"] in ("read", "empty", "stub") and r["total_chars"] < 200,
+             (r["status"], r.get("total_chars")))
+    check("and such a page is NOT declared clean without being checked",
+             r.get("stub_check") in ("looks_like_stub", "clean"),
+             (r.get("stub_check"), r.get("stub_reason")))
+    r = one_page("/says-more")
+    check("Content-Length LARGER than the body: an answer, not a hang",
+             r["status"] in ("read", "empty", "stub"), (r["status"], r.get("reason")))
+
+    print("\n== an address that cannot be parsed is REFUSED, not dropped ==")
+    # A PORT OUTSIDE 0-65535 MAKES `urlsplit(...).port` RAISE, and the raise used
+    # to happen on a path with no guard around it: the caller received an empty
+    # body — no status, no reason — which is indistinguishable from a hung
+    # server. A verdict about an address belongs where addresses are judged.
+    for addr in ("http://example.com:99999/", "http://example.com:notaport/"):
+        r = reader.read([addr])["results"][0]
+        check(f"a bad port is a named refusal, not silence: {addr}",
+                 r["status"] == "forbidden" and "port" in r["reason"],
+                 (r["status"], r["reason"][:60]))
+    # AND THE GUARD ITSELF: an unforeseen raise on the single path must still
+    # produce an answer, as it does on the parallel one. The parallel path had
+    # this and its neighbour did not — the same work at two levels of care.
+    was_one = reader._read_one
+    try:
+        def explode(*a, **k):
+            raise RuntimeError("planted")
+        reader._read_one = explode
+        r = reader.read([API_BASE + "/ok"])
+        check("an unforeseen raise on one address still yields an answer",
+                 r["ok"] is True and r["results"][0]["status"] == "unreachable"
+                 and "planted" in r["results"][0]["reason"],
+                 (r.get("ok"), r["results"][0].get("status"),
+                  r["results"][0].get("reason", "")[:40]))
+    finally:
+        reader._read_one = was_one
+
     print("\n== robots.txt: reported, not enforced ==")
     r = one_page("/disallowed/here")
     check("robots: the site's ban IS VISIBLE in the answer",
@@ -821,6 +1030,15 @@ def main() -> int:
     r = one_page("/ok")
     check("robots: an allowed path is marked differently",
              r["robots"] == "allowed", r["robots"])
+    # A COMPRESSED robots.txt IS STILL robots.txt. We announce that we accept
+    # gzip, so a site may answer with it; read without unpacking it becomes
+    # rubbish, `Disallow` is never found, and the verdict says `allowed` over a
+    # site that forbade us.
+    reader._robots.clear()
+    reader._reset_rate()
+    r = reader.read([GZ_BASE + "/closed/page"])["results"][0]
+    check("robots: a ban sent COMPRESSED is seen, not read as permission",
+             r["robots"] == "disallowed_by_site", r["robots"])
 
     site.shutdown()
     print(f"\nreading suite: ok {ok_count}, failed {fail_count}")

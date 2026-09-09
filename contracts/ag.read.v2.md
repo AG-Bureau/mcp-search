@@ -14,41 +14,17 @@ outcomes · a scan with no text layer · what counts as success · the reference
 attribute and why it differs from search · how it pairs with `web_search` · what
 is deliberately absent.
 
-## What changed against `/1`, value by value
+## What changed against `/1`
 
-The version number marks THE WIRE DICTIONARY and nothing else. `/1` and `/2`
-carry the same fields, the same shapes and the same guarantees; what changed is
-that the VALUES inside them are English. A caller branches on values, so the
-dictionary is part of the contract — and a changed dictionary under an unchanged
-name would be indistinguishable in a stored answer and in code being read.
+`/1` and `/2` carry the same fields, the same shapes and the same guarantees.
+What changed is the DICTIONARY OF VALUES the fields take, and that is why the
+name changed with it: a caller branches on values, so the dictionary is part of
+the contract, and a changed dictionary under an unchanged name is
+indistinguishable in a stored answer and in code being read.
 
 The break is loud on purpose: an answer says `/2`, and anything expecting `/1`
-fails at once instead of silently matching nothing. If you have `/1` answers in
-storage, this table is how to read them:
+fails at once instead of silently matching nothing.
 
-| field | `/1` | `/2` |
-|---|---|---|
-| `status` | `прочитано` | `read` |
-| | `пусто` | `empty` |
-| | `заглушка` | `stub` |
-| | `отказ` | `refused` |
-| | `не открылась` | `unreachable` |
-| | `запрещено` | `forbidden` |
-| | `не дошли` | `not_reached` |
-| `stub_check` | `чисто` | `clean` |
-| | `похоже на заглушку` | `looks_like_stub` |
-| | `не проверялось` | `not_checked` |
-| `text_source` | `текстовый слой` | `text_layer` |
-| | `распознано` | `recognised` |
-| `robots` | `не ограничено` | `allowed` |
-| | `запрещено правилами сайта` | `disallowed_by_site` |
-| `paths_available` | `жив` | `alive` |
-| | `не подключён` | `not_wired_up` |
-| | `жив (chromium …)` | `alive (chromium …)` |
-
-Nothing else moved: no field was added, removed or renamed, except that `text_source` gained `not_recognised (scan)` for the search path, and no
-guarantee changed. A `/1` consumer that branched on FIELDS rather than values
-needs only the new value names.
 ## Reading is a separate tool, and search reads anyway
 
 `web_search` reads the top three results by default and returns their text. That
@@ -134,6 +110,14 @@ over doing it.
 
 Top level: `contract`, `ok`, `error`, `requested`, `count`, `failed`, `results[]`,
 `via_used`, `paths_available`, `all_pages_clean`, `deadline_hit`.
+
+At the top level, beside `ok` and `results`: **`arguments_adjusted`**, empty when
+every argument arrived usable and never absent. A boolean that could not be read
+(`links="perhaps"`) turns its flag off and is named there; booleans are parsed
+the same way at both doors, and `true/false`, `1/0`, `yes/no`, `on/off`, `y/n`,
+`t/f` and `True/False` are all understood, case-blind. `null` — the JSON literal
+or the word — is not a boolean and turns the flag off with a reason. An
+EMPTY value counts as unreadable; an ABSENT argument keeps its default silently.
 
 Per address:
 

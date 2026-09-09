@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -36,6 +37,20 @@ REPLY = {"results": [
      "engines": ["mwmbl"]},
 ], "unresponsive_engines": [["zapmeta", "timeout"]]}
 EMPTY_REPLY = {"results": [], "unresponsive_engines": []}
+# AN IMAGE ANSWER, WHICH THE FIXTURE COULD NOT PRODUCE. Without it the image
+# result set came back empty, and three checks of its shape sat behind
+# `if d["results"]:` — never running, always green. A check that cannot fail is
+# worse than no check: it occupies the place where one would have been.
+IMAGE_REPLY = {"results": [
+    {"url": "https://example.org/gallery/one", "title": "A picture",
+     "img_src": "https://cdn.example.net/one.jpg",
+     "thumbnail": "https://cdn.example.net/one-thumb.jpg",
+     "content": "", "author": "Someone", "publishedDate": "2026-01-01",
+     "engines": ["engine-a"]},
+    {"url": "https://example.org/gallery/two", "title": "Another picture",
+     "img_src": "https://cdn.example.net/two.jpg", "thumbnail": "",
+     "content": "", "engines": ["engine-a"]},
+], "unresponsive_engines": []}
 MODE = {"body": REPLY, "code": 200, "not_json": False}
 
 
@@ -81,6 +96,14 @@ class Fake(BaseHTTPRequestHandler):
             CONFIG_HITS.append(1)
             body = json.dumps({"engines": []}).encode()
             self.send_response(200)
+        elif p.path == "/page":
+            # A PAGE THE TESTS CAN READ WITHOUT LEAVING THE MACHINE. Reading is
+            # what the deep health check does, and pointing it at a real address
+            # made the suite spend the one resource this module protects — the
+            # reputation of the address it calls from — on every run.
+            body = ("<html><head><title>Fixture Page</title></head><body><p>"
+                    + "Fixture Domain. " * 40 + "</p></body></html>").encode()
+            self.send_response(200)
         else:
             body = b"{}"
             self.send_response(404)
@@ -114,6 +137,7 @@ def main() -> int:
     os.environ["SEARXNG_URL"] = f"http://127.0.0.1:{fake.server_address[1]}"
     import server  # imported AFTER the address is replaced: it is read at import time
     import reader
+    import deep as deep_module
 
     # The rate limiter is switched off for the functional checks: by design it
     # skips an engine asked less than a second ago, and consecutive tests then
@@ -269,9 +293,9 @@ def main() -> int:
                  "params": {"name": "web_search", "arguments": {"query": QUERY}}})
     payload = json.loads(r["result"]["content"][0]["text"])
     check("a successful call is not marked isError", r["result"]["isError"] is False, r)
-    check("the answer declares the ag.search/2 contract",
-             payload["contract"] == "ag.search/2", payload)
-    check("a non-link result is dropped (2 of 3)", payload["count"] == 2, payload)
+    check("the answer declares the ag.search/3 contract",
+             payload["contract"] == "ag.search/3", payload)
+    check("a non-link result is dropped (2 of 3)", len(payload["results"]) == 2, payload)
     check("the title is stripped of extra spaces",
              payload["results"][0]["title"] == "First", payload["results"][0])
     # `via` names those that returned the link. With sequential querying that is
@@ -280,8 +304,9 @@ def main() -> int:
     check("via names the engines that were asked",
              set(x.strip() for x in payload["results"][0]["via"].split(","))
              <= set(payload["engines_asked"]), payload["results"][0]["via"])
-    check("silent engines reach the consumer",
-             payload["unresponsive_engines"] == [["zapmeta", "timeout"]], payload)
+    check("silent engines reach the consumer, inside `trouble`",
+             payload["trouble"]["unresponsive_engines"] == [["zapmeta", "timeout"]],
+             payload["trouble"])
     check("a query in Cyrillic goes out with language=ru",
              REQUESTS[-1]["language"] == "ru", REQUESTS[-1])
     check("json format is requested, pages start at one",
@@ -289,7 +314,7 @@ def main() -> int:
 
     _, r = post({"jsonrpc": "2.0", "id": 9, "method": "tools/call",
                  "params": {"name": "web_search",
-                            "arguments": {"query": "Boris Ivanov", "page": 2}}})
+                            "arguments": {"query": "ghost automotive", "page": 2}}})
     check("a Latin query goes out with language=en", REQUESTS[-1]["language"] == "en",
              REQUESTS[-1])
     check("page=2 becomes pageno=3", REQUESTS[-1]["pageno"] == "3", REQUESTS[-1])
@@ -301,7 +326,7 @@ def main() -> int:
     payload = json.loads(r["result"]["content"][0]["text"])
     check("an EMPTY result set is a success, not isError",
              r["result"]["isError"] is False and payload["ok"] is True
-             and payload["count"] == 0, r["result"])
+             and payload["results"] == [], r["result"])
     MODE["body"] = REPLY
 
     # The field must be present in the ORDINARY answer rather than appear on a
@@ -316,20 +341,34 @@ def main() -> int:
         _, r = post({"jsonrpc": "2.0", "id": 30, "method": "tools/call",
                      "params": {"name": "web_search", "arguments": {"query": "x"}}})
         payload = json.loads(r["result"]["content"][0]["text"])
-        check(f"MCP: the field is present and [] when {name}",
-                 payload.get("unresponsive_engines") == [], payload)
+        # EMPTY DIFFERS FROM ABSENT — the same requirement the field itself
+        # carried: `trouble` is ALWAYS there, and an empty dictionary means
+        # "looked, all well". An absent key would mean "this side was not
+        # examined at all", which is different news and must not share a shape
+        # with a healthy answer.
+        # (Here `trouble` is not empty for an unrelated reason: the test instance
+        # has no prober database, so the pool is honestly the seed. What is
+        # checked is that SILENT ENGINES leave no key when there were none.)
+        check(f"MCP: `trouble` is present and says nothing about silence when {name}",
+                 isinstance(payload.get("trouble"), dict)
+                 and "unresponsive_engines" not in payload["trouble"],
+                 payload.get("trouble"))
         code, payload = get("/ag/search?q=x")
-        check(f"ag.search/2: the field is present and [] when {name}",
-                 payload.get("unresponsive_engines") == [], payload)
+        check(f"ag.search/3: `trouble` is present and says nothing about silence when {name}",
+                 isinstance(payload.get("trouble"), dict)
+                 and "unresponsive_engines" not in payload["trouble"],
+                 payload.get("trouble"))
     MODE["body"] = REPLY
     _, r = post({"jsonrpc": "2.0", "id": 31, "method": "tools/call",
                  "params": {"name": "web_search", "arguments": {"query": "x"}}})
     payload = json.loads(r["result"]["content"][0]["text"])
     check("MCP: a silent engine arrives with its reason",
-             payload["unresponsive_engines"] == [["zapmeta", "timeout"]], payload)
+             payload["trouble"]["unresponsive_engines"] == [["zapmeta", "timeout"]],
+             payload["trouble"])
     code, payload = get("/ag/search?q=x")
-    check("ag.search/2: a silent engine arrives with its reason",
-             payload["unresponsive_engines"] == [["zapmeta", "timeout"]], payload)
+    check("ag.search/3: a silent engine arrives with its reason",
+             payload["trouble"]["unresponsive_engines"] == [["zapmeta", "timeout"]],
+             payload["trouble"])
 
     # The hole: an engine that returned emptiness silently does NOT appear in
     # unresponsive_engines. So a field made contractual covered half the cases.
@@ -348,15 +387,27 @@ def main() -> int:
              and payload.get("engines_answered"), payload.get("engines_answered"))
     asked = set(payload["engines_asked"])
     answered = set(payload["engines_answered"])
-    silent = {m[0] for m in payload["unresponsive_engines"]}
+    silent = {m[0] for m in payload["trouble"].get("unresponsive_engines", [])}
     # The meaning of the difference: an engine that was asked and appears neither
     # among those that answered nor among those that stayed silent returned
     # emptiness SILENTLY — otherwise nobody would see its failure.
-    check("asked minus answered minus silent is computable and consistent",
-             (asked - answered - silent) == (asked - answered - silent)
-             and asked >= answered, (sorted(asked), sorted(answered)))
+    # THE POINT IS THE REMAINDER ITSELF: an engine that was asked, did not answer
+    # and is not named as silent returned emptiness QUIETLY, and that engine must
+    # be identifiable by subtraction. Written as `X == X` this compared a set
+    # with itself and could not fail — a check occupying the place of a check.
+    quietly_empty = asked - answered - silent
+    # NOT DISJOINT, AND THAT IS CORRECT: one engine can hand back results in one
+    # round and be reported silent in another, so `answered` and `silent` may
+    # overlap. What must hold is that neither contains a name nobody asked.
+    check("nobody is answered or silent without having been asked",
+             asked >= answered and asked >= silent,
+             (sorted(asked), sorted(answered), sorted(silent)))
+    check("a quietly empty engine is identifiable by subtraction, not by guessing",
+             quietly_empty == {e for e in asked
+                               if e not in answered and e not in silent},
+             sorted(quietly_empty))
     code, payload = get("/ag/search?q=x")
-    check("ag.search/2 returns the same two fields",
+    check("ag.search/3 returns the same two fields",
              "engines_asked" in payload and "engines_answered" in payload, payload)
 
     # The third way for an engine to fail: answer, but not our question. Measured
@@ -408,8 +459,16 @@ def main() -> int:
              payload["engines_asked"] == [server.order()[0]], payload["engines_asked"])
     check("EXACTLY one request went to the metasearch, not five",
              len(REQUESTS) == 1, [z["engines"] for z in REQUESTS])
-    check("engines_used shows how many engines were needed",
-             payload["engines_used"] == 1, payload["engines_used"])
+    # A COUNT, NOT A SIGN TO BRANCH ON: it explains the call rather than
+    # changing what the caller does, so it lives behind `verbose`. Checked where
+    # it now is.
+    _, rv = post({"jsonrpc": "2.0", "id": 51, "method": "tools/call",
+                  "params": {"name": "web_search",
+                             "arguments": {"query": QUERY, "max_results": 2,
+                                           "verbose": True}}})
+    loud = json.loads(rv["result"]["content"][0]["text"])
+    check("engines_used shows how many engines were needed (verbose)",
+             loud["engines_used"] == 1, loud["engines_used"])
 
     # Switching on failure is not a separate mechanism but a property of the order.
     REQUESTS.clear()
@@ -490,8 +549,12 @@ def main() -> int:
              server.order()[0] not in payload["engines_asked"], payload["engines_asked"])
     check("the next engine is taken instead, not a refusal",
              payload["ok"] is True and payload["engines_asked"], payload)
-    check("the skipped ones are named explicitly",
-             server.order()[0] in payload["engines_skipped"], payload["engines_skipped"])
+    # "Skipped by pacing" is not trouble but the queue working: the answer is
+    # complete, another engine was asked. So the count lives behind `verbose`
+    # rather than in `trouble`.
+    code, loud = get("/ag/search?q=" + urllib.parse.quote(QUERY) + "&n=2&verbose=1")
+    check("the skipped ones are named explicitly (verbose)",
+             bool(loud["engines_skipped"]), loud["engines_skipped"])
     # The worst case: the rate limit closed EVERYBODY. That is a refusal with a
     # reason, not an empty result set.
     for i in range(len(server.order())):
@@ -502,9 +565,12 @@ def main() -> int:
     payload = json.loads(r["result"]["content"][0]["text"])
     check("when pacing closed everyone — a REFUSAL with a reason, not an empty result set",
              payload["ok"] is False and "rate limit" in payload["error"], payload)
-    check("even in a refusal the engine fields are in place",
-             all(k in payload for k in ("unresponsive_engines", "engines_asked",
-                                        "engines_answered", "engines_irrelevant")), payload)
+    # THE SHAPE IS THE SAME IN SUCCESS AND IN REFUSAL. Otherwise the consumer
+    # branches on the PRESENCE of fields, which this module never makes anyone do.
+    check("even in a refusal the loud fields are all in place",
+             all(k in payload for k in server.LOUD), sorted(payload))
+    check("and `trouble` is a dictionary there too, not a missing key",
+             isinstance(payload.get("trouble"), dict), payload.get("trouble"))
     server.ENGINE_INTERVAL_S = 0.0
     server._reset_rate()
 
@@ -528,7 +594,10 @@ def main() -> int:
     outcomes = []
     lock_ = threading.Lock()
     def concurrent(i):
-        code, payload = get("/ag/search?q=" + urllib.parse.quote(f"{QUERY} {i}"))
+        # `read=false`: this block is about the QUEUE, and reading here would
+        # fetch the fixture's links from the real internet — twelve times per run.
+        code, payload = get("/ag/search?read=false&q="
+                            + urllib.parse.quote(f"{QUERY} {i}"))
         with lock_:
             outcomes.append(payload.get("ok"))
     threads_ = [threading.Thread(target=concurrent, args=(i,)) for i in range(12)]
@@ -597,15 +666,48 @@ def main() -> int:
     MODE["not_json"] = False
 
     server._reset_rate()
-    print("\nag.search/2 over plain HTTP:")
+    print("\nag.search/3 over plain HTTP:")
     code, payload = get("/ag/search?q=" + urllib.parse.quote(QUERY) + "&n=1")
     check("GET /ag/search answers 200 with the contract", code == 200
-             and payload["contract"] == "ag.search/2" and payload["count"] == 1, payload)
+             and payload["contract"] == "ag.search/3"
+             and len(payload["results"]) == 1, payload)
     code, payload = get("/ag/search?q=")
     check("an empty q gives a refusal with an explanation, not an empty result set",
-             code == 502 and payload["ok"] is False, payload)
+             code == 400 and payload["ok"] is False, (code, payload.get("error")))
     code, payload = get("/no-such-path")
     check("an unknown path gives 404 with an explanation", code == 404, payload)
+
+    # EVERY DOOR IS OPENED AT LEAST ONCE. Four of them — reading, images and the
+    # two views — appeared in no test at all: a door can be broken outright, in a
+    # way no unit check sees, and every suite stays green. Nothing subtle is
+    # asked of them here; the question is only "does it answer, and with its own
+    # contract".
+    MODE["body"] = IMAGE_REPLY
+    code, payload = get("/ag/images?q=" + urllib.parse.quote(QUERY) + "&n=2")
+    check("GET /ag/images answers with its own contract",
+             code == 200 and payload["contract"] == "ag.images/3", (code, payload))
+    check("and its answer has the same shape as the MCP one",
+             set(payload) == set(server.image_search(QUERY, n=2)), sorted(payload))
+    MODE["body"] = REPLY
+    code, payload = get("/ag/read?urls=")
+    check("GET /ag/read answers with the reading contract, refusal included",
+             code in (200, 400, 502) and payload["contract"] == "ag.read/2",
+             (code, payload.get("contract"), payload.get("error", "")[:40]))
+    check("and the reading refusal carries `arguments_adjusted`, never absent",
+             payload.get("arguments_adjusted") == [], payload.get("arguments_adjusted"))
+    # THE VIEWS ANSWER 503 WITHOUT A PROBER DATABASE, and that is the honest
+    # code: there is nothing measured to show. What must never happen is a 200
+    # over emptiness — "checked, all fine" about a view that has no data.
+    code, payload = get("/engines")
+    check("GET /engines answers, and does not call an empty view healthy",
+             code in (200, 503) and payload.get("ok") is (code == 200)
+             and ("pool_source" in payload or payload.get("error")),
+             (code, sorted(payload)[:6]))
+    code, payload = get("/pages")
+    check("GET /pages answers about the reading paths, or says why it cannot",
+             code in (200, 503) and payload.get("ok") is (code == 200)
+             and ("pages" in payload or payload.get("error")),
+             (code, sorted(payload)[:6]))
 
     # This exists because the service had no answer to "is anything calling it at
     # all?": the log is silenced and there were no counters. The answer had to be
@@ -642,6 +744,17 @@ def main() -> int:
              mcp["searches"] == after["searches"] + 1, (after["searches"], mcp["searches"]))
 
     print("\nhealth answers for the CAPABILITY, not for the process:")
+    # THE DEEP CHECK READS A PAGE, AND IT MUST NOT BE SOMEBODY ELSE'S. The
+    # constant is a variable for exactly this reason ("configurable so that tests
+    # can check reading without going outside") — and the possibility went unused
+    # while README promised in bold that not one check goes out. The suite is run
+    # with `--network none` to hold that promise; see tests/README.md.
+    was_reference = server.DEEP_READ_REFERENCE
+    os.environ["READ_ALLOW_INTERNAL"] = "1"
+    # The page lives on the FAKE METASEARCH, not on the adapter: `base` is the
+    # module under test and answers 404 there.
+    server.DEEP_READ_REFERENCE = (
+        f"http://127.0.0.1:{fake.server_address[1]}/page", "Fixture Domain")
     code, payload = get("/healthz")
     check("a live metasearch gives 200", code == 200 and payload["ok"] is True, payload)
     check("the shallow check honestly says what it does not prove",
@@ -651,6 +764,9 @@ def main() -> int:
     # the end, not collect a result set — extra results are pure cost here.
     check("the deep check performs a real search",
              code == 200 and payload.get("deep_count") == 1, payload)
+    server.DEEP_READ_REFERENCE = was_reference
+    os.environ.pop("READ_ALLOW_INTERNAL", None)
+
     print("\n== deep search: the outcome and its zeroes ==")
     # THE OUTCOME IS DECIDED BY ZEROES, NOT BY THRESHOLDS. Paid for by
     # measurement: two runs of one question differed twofold in corpus size, so a
@@ -747,7 +863,7 @@ def main() -> int:
                  d["ok"] is False and "metasearch" in d["error"],
                  (d["ok"], d.get("error", "")[:40]))
         check("the engines are NOT declared silent: they were not asked",
-                 not d["unresponsive_engines"], d["unresponsive_engines"])
+                 not d["trouble"].get("unresponsive_engines"), d["trouble"])
     finally:
         server._round = was_round2
     # AND THE MAIN CONSEQUENCE: the pool is not taken out for two minutes.
@@ -809,6 +925,25 @@ def main() -> int:
     # talks about a registry rather than about the missing build.
     tags = sorted(set(_re.findall(r"^\s*image:\s*ag-mod-search/adapter:(\S+)",
                                   pool_state, _re.M)))
+    # THE PROMISE WAS IN THE SHIPPED TREE AND THE CHECK WAS NOT. browser/Dockerfile
+    # says a check keeps the two playwright pins equal; the check lived in our
+    # own static suite, which does NOT ship — so for an outsider the sentence
+    # named a guard that was not there. The pins are compared here instead, in
+    # the suite that travels with the code. The Dockerfiles are mounted for this
+    # (see in-image.sh); when they are not, the check FAILS rather than skips.
+    pins = {}
+    for who, at in (("adapter", "/dockerfiles/adapter"),
+                    ("browser", "/dockerfiles/browser")):
+        local = os.path.join(os.path.dirname(__file__), "..", who, "Dockerfile")
+        path = at if os.path.exists(at) else local
+        pins[who] = ("" if not os.path.exists(path) else
+                     "".join(_re.findall(r"playwright==([0-9.]+)",
+                                          open(path, encoding="utf-8").read())[:1]))
+    check("the playwright pin is readable in both recipes (else this checks nothing)",
+             all(pins.values()), pins)
+    check("and the two are EQUAL — a divergence breaks the connection silently",
+             pins["adapter"] == pins["browser"], pins)
+
     check("every adapter image in the deployment file carries ONE tag",
              len(tags) == 1, tags)
     check("and that tag is the version the module reports in its handshake",
@@ -1102,7 +1237,10 @@ def main() -> int:
     try:
         reader.read_many = stub_fn
         read_calls.clear()
-        d = server.search_read("test", n=5)
+        # THE LOUD ANSWER IS ASKED FOR HERE (`verbose`): what is checked is the
+        # ACCOUNTING — how many pages were read and what it cost — and that is
+        # exactly what moved behind the knob. The default shape is checked below.
+        d = server.search_read("test", n=5, verbose=True)
         check("reading happens WITHOUT an argument: content is not empty",
                  d["read"] is True and (d["results"][0].get("content") or ""),
                  (d.get("read"), d["results"][0].get("content", "")[:20]))
@@ -1134,7 +1272,7 @@ def main() -> int:
                  [r.get("read_status") for r in tail])
 
         read_calls.clear()
-        d = server.search_read("test", n=5, read=False)
+        d = server.search_read("test", n=5, read=False, verbose=True)
         check("read:false restores the cheap path — not one read",
                  not read_calls and d["pages_read"] == 0, read_calls)
         check("the reading fields are returned under read:false too, they do not vanish",
@@ -1144,6 +1282,46 @@ def main() -> int:
         d = server.search_read("test", n=5, read_top=1)
         check("read_top sets the number of pages read",
                  len(read_calls[0]) == 1, read_calls[0])
+
+        # WHAT THE CALLER GETS BY DEFAULT. A consumer measured us: twenty-five
+        # top-level fields, seven ever read, one branched on. The answer now
+        # carries what they act on, plus `trouble`; the rest comes on request.
+        read_calls.clear()
+        quiet = server.search_read("test", n=5)
+        check("by default the answer carries only what the caller acts on",
+                 set(quiet) == set(server.LOUD), sorted(quiet))
+        check("`trouble` is always there, and empty means checked-and-clean",
+                 isinstance(quiet["trouble"], dict), quiet.get("trouble"))
+        loud = server.search_read("test", n=5, verbose=True)
+        check("verbose adds the accounting back, and nothing is lost",
+                 set(loud) > set(quiet) and "timing_ms" in loud and "pool_source" in loud,
+                 sorted(set(loud) - set(quiet)))
+
+        # ZERO MEANS "NOT ASKED", AND IT IS SAID RATHER THAN INFERRED. The
+        # schema declared `minimum: 1` while zero was accepted and silently meant
+        # "you decide" — a zero for "no preference" beside a zero that reads as
+        # "none at all".
+        read_calls.clear()
+        zero = server.search_read("test", n=5, read_top=0, verbose=True)
+        check("read_top=0 means `no preference`: the default number is read",
+                 len(read_calls[0]) == min(server.SEARCH_READ_TOP_N,
+                                           len(zero["results"])), read_calls[0])
+        check("and a legitimate zero is NOT reported as an adjustment",
+                 not [x for x in zero["trouble"].get("arguments_adjusted", [])
+                      if "read_top" in x], zero["trouble"])
+        check("the schema declares the range it really accepts",
+                 server.TOOL["inputSchema"]["properties"]["read_top"]["minimum"] == 0,
+                 server.TOOL["inputSchema"]["properties"]["read_top"])
+        read_calls.clear()
+        odd = server.search_read("test", n=5, read_top="many")
+        check("rubbish in read_top is NAMED in trouble, not silently defaulted",
+                 any("read_top" in x for x in
+                     odd["trouble"].get("arguments_adjusted", [])), odd["trouble"])
+        read_calls.clear()
+        big = server.search_read("test", n=5, read_top=999)
+        check("a value above the ceiling is clamped AND said so",
+                 any("clamped" in x for x in
+                     big["trouble"].get("arguments_adjusted", [])), big["trouble"])
     finally:
         reader.read_many = was_read_many
 
@@ -1555,6 +1733,564 @@ def main() -> int:
     check("an ordinary address is left alone",
              server._unwrap_redirect("https://normal.ru/x") == "https://normal.ru/x")
 
+    print("\n== evidence about THIS answer, not about the engine ==")
+    # THE DEFECT A LIVE TOOL FOUND AND FOUR CODE READINGS DID NOT. Asked about a
+    # thing that does not exist, engines answer with the nearest thing that does:
+    # a query naming an invented product came back with confident results about a
+    # real recall of a real toaster — `trouble: {}`, `all_engines_clean: true`,
+    # and nothing anywhere saying the subject had been replaced.
+    #
+    # Nothing in that answer was ABOUT that answer: the trust label describes the
+    # engine's probe history, the pool describes the instance. The one thing a
+    # caller can check cheaply is whether their own distinctive words survived
+    # into the results at all.
+    substituted = [{"title": "Panasonic Recalls Electric Toaster Ovens",
+                    "snippet": "a recall of toaster ovens", "url": "https://example.org/a"},
+                   {"title": "Nationwide Recall Announced",
+                    "snippet": "toaster recall 2024", "url": "https://example.org/b"}]
+    nowhere = server._word_coverage("Zorblax Q9 quantum toaster recall 2024", substituted)
+    check("a word of the query that is in NO result is named",
+             set(nowhere) == {"zorblax", "quantum"}, nowhere)
+    check("and an ordinary query, whose words are all there, names nothing",
+             server._word_coverage("panasonic toaster recall 2024", substituted) == [],
+             server._word_coverage("panasonic toaster recall 2024", substituted))
+    # ONE DEFINITION OF "WHICH WORDS COUNT" for the flag and for the evidence:
+    # two rules would drift and then disagree about the same query.
+    check("the words judged and the words reported are the same words",
+             server._query_words("Zorblax Q9 quantum") == ["zorblax", "quantum"],
+             server._query_words("Zorblax Q9 quantum"))
+    check("a result carries the caller's words that are in IT",
+             [w for w in server._query_words("toaster recall")
+              if w[:5] in server._words_in(substituted[0])] == ["toaster", "recall"],
+             server._words_in(substituted[0])[:60])
+    # AND IT REACHES THE ANSWER, in `trouble`, where a caller already looks for
+    # "this is less than it seems".
+    # THE FIXTURE PASTES THE QUERY INTO ITS OWN SNIPPETS, so "in no result at
+    # all" is unreachable through it — by construction, not by accident. The
+    # plumbing is therefore checked where it is: the field travels into `trouble`.
+    carried = server._trouble({"query_words_matched_nowhere": ["zorblax"]})
+    check("an answer whose results share no word with the query says so in trouble",
+             carried.get("query_words_matched_nowhere") == ["zorblax"], carried)
+    check("and a query whose words are all present adds nothing to trouble",
+             "query_words_matched_nowhere" not in
+             server._trouble({"query_words_matched_nowhere": []}),
+             server._trouble({"query_words_matched_nowhere": []}))
+    server._reset_rate()
+    MODE["body"] = REPLY
+    d = server.search_read(QUERY, n=2, read=False)
+    check("and every result carries the words of the query it does contain",
+             all("query_words_here" in r for r in d["results"]),
+             sorted(d["results"][0]) if d["results"] else [])
+
+    print("\n== somebody else's JSON is not our shape ==")
+    # A RAISE ON THIS PATH IS NOT AN ERROR MESSAGE — IT IS NO ANSWER AT ALL: the
+    # connection drops and the caller cannot tell us from a dead network. Web
+    # search passed its query through the cleaner; its two neighbours did not, so
+    # `{"query": 123}` reached `.strip()` and raised.
+    for tool_name, args in (("web_image_search", {"query": 123}),
+                            ("web_deep_search", {"question": {"a": 1}}),
+                            ("web_search", {"query": ["a", "list"]}),
+                            ("web_read", {"urls": 5}),
+                            ("web_screenshot", {"url": 7})):
+        _, r = post({"jsonrpc": "2.0", "id": 130, "method": "tools/call",
+                     "params": {"name": tool_name, "arguments": args}})
+        body = json.loads(r["result"]["content"][0]["text"]) if r.get("result") else {}
+        check(f"{tool_name}: a wrongly typed argument still gets an ANSWER",
+                 isinstance(body.get("ok"), bool), (tool_name, str(r)[:80]))
+    # AND THE COUNTER KEYED BY THE CALLER'S OWN TEXT IS BOUNDED, one field away
+    # from where the same bound was already put: a client sending a new method
+    # name per call would otherwise grow this dictionary for months and then pour
+    # it out through /stats.
+    was_counters2 = json.loads(json.dumps(server._counters))
+    try:
+        for i in range(server.CLIENT_KEYS_MAX + 20):
+            server._count_mcp_call({"method": f"invented/{i}"}, None)
+        check("the by_path counter cannot be grown without limit by a caller",
+                 len(server._counters["by_path"]) <= server.CLIENT_KEYS_MAX + 1,
+                 len(server._counters["by_path"]))
+    finally:
+        server._counters.update(was_counters2)
+
+    print("\n== whose mistake the code reports ==")
+    # `502` SAYS "THE THING BEHIND ME FAILED", and a caller who forgot an
+    # argument reads that as our breakage and retries — the wrong action, twice.
+    # Reading answered `400` for this while its four neighbours answered `502`:
+    # one module, one kind of mistake, two classes of code.
+    #
+    # The list of caller-mistake phrases lives in the code; this pins it to the
+    # refusals actually produced, so a reworded message cannot silently turn a
+    # caller's error back into "the upstream is down".
+    MODE["body"] = REPLY
+    for door, expect_400 in (("/ag/search?q=", True), ("/ag/images?q=", True),
+                             ("/ag/read?urls=", True), ("/ag/deep?q=", True),
+                             ("/ag/screenshot?url=", True)):
+        code, payload = get(door)
+        check(f"{door.split('?')[0]}: a caller's own mistake answers 400, not 502",
+                 (code == 400) is expect_400,
+                 (door, code, str(payload.get("error"))[:60]))
+    # AND THE OTHER DIRECTION MUST STILL BE 502: when the metasearch is the one
+    # that failed, the caller SHOULD retry, and the code must say so.
+    was_url2 = server.SEARXNG_URL
+    try:
+        server.SEARXNG_URL = "http://127.0.0.1:9"
+        code, payload = get("/ag/search?q=" + urllib.parse.quote(QUERY))
+        check("an upstream failure still answers 502, so retrying stays right",
+                 code == 502, (code, str(payload.get("error"))[:60]))
+    finally:
+        server.SEARXNG_URL = was_url2
+    server._reset_rate()
+
+    print("\n== every tool is called THROUGH THE DOOR at least once ==")
+    # THREE OF FIVE WERE NEVER INVOKED VIA `tools/call`. Their internals were
+    # tested directly, so a break in the DOOR — a wrong argument name, a lost
+    # keyword, a shape the wrapper mangles — would leave every suite green while
+    # nothing worked for a caller. Nothing subtle is asked here: does the tool
+    # answer, and is it its own contract.
+    MODE["body"] = IMAGE_REPLY
+    for tool_name, args, contract in (
+            ("web_image_search", {"query": QUERY, "max_results": 2}, "ag.images/3"),
+            # No browser and no model are configured in the suite, so these two
+            # answer with a refusal — which is exactly what must arrive shaped,
+            # named and with its own contract rather than as an exception.
+            ("web_screenshot", {"url": "https://example.org/p"}, "ag.shot/1"),
+            ("web_deep_search", {"question": "what is a ghost"}, "ag.deep/2")):
+        _, r = post({"jsonrpc": "2.0", "id": 120, "method": "tools/call",
+                     "params": {"name": tool_name, "arguments": args}})
+        body = json.loads(r["result"]["content"][0]["text"])
+        check(f"{tool_name}: the door answers with its own contract",
+                 body.get("contract") == contract, (tool_name, body.get("contract")))
+        check(f"{tool_name}: `ok` is a boolean, and a refusal names its reason",
+                 isinstance(body.get("ok"), bool)
+                 and (body["ok"] or body.get("error")),
+                 (body.get("ok"), str(body.get("error"))[:60]))
+    MODE["body"] = REPLY
+
+    print("\n== every key the caller receives is described SOMEWHERE ==")
+    # THE GUARD FOR THE OTHER DIRECTION. One already stands: a name in the prose
+    # must exist in the code, so a renamed field cannot leave a document behind.
+    # Nothing stood the other way — a field ARRIVING in the code owed no
+    # explanation, and five of them reached callers undescribed
+    # (`download_truncated`, `cache_age_s`, `query_words_here`,
+    # `query_words_matched_nowhere`, `not_attempted`).
+    #
+    # THE SOURCE OF TRUTH IS A LIVE ANSWER, not a list kept here: a list would go
+    # stale exactly the way the documents did, and then the guard would testify
+    # about a shape nobody returns.
+    MODE["body"] = REPLY
+    server._reset_rate()
+    answers = [server.search_read(QUERY, n=2, read=False),
+               server.search_read(QUERY, n=2, read=False, verbose=True),
+               server.image_search(QUERY, n=2),
+               server.image_search(QUERY, n=2, verbose=True),
+               reader.read([]),
+               reader._shot_refusal("https://example.org/p", "no browser"),
+               deep_module._blank_answer("q", "no model")]
+    keys = set()
+    for answer in answers:
+        keys |= set(answer)
+        for item in (answer.get("results") or [])[:1]:
+            keys |= set(item)
+        for inner in ("trouble", "usage", "timing_ms", "recognition"):
+            if isinstance(answer.get(inner), dict):
+                keys |= set(answer[inner])
+    # `trouble` carries only what went wrong, so its keys are named explicitly:
+    # a healthy fixture cannot produce them, and their absence here would be a
+    # hole in the guard rather than a clean bill.
+    keys |= {"search_aborted", "engines_unasked", "unresponsive_engines",
+             "engines_irrelevant", "pool_unmeasured", "arguments_adjusted",
+             "query_words_matched_nowhere"}
+    described = ""
+    for doc in ("README.md", "HOWTO-CALL.md", "ALGORITHM.md"):
+        at = os.path.join("/docs", doc)
+        local = os.path.join(os.path.dirname(__file__), "..", doc)
+        path = at if os.path.exists(at) else local
+        check(f"{doc} is readable by this guard (a skip would be a false green)",
+                 os.path.exists(path), path)
+        if os.path.exists(path):
+            described += open(path, encoding="utf-8").read()
+    for contract in ("ag.search.v3.md", "ag.read.v2.md", "ag.images.v3.md",
+                     "ag.deep.v2.md"):
+        at = os.path.join("/contracts", contract)
+        here = os.path.dirname(__file__)
+        # Same two places as in-image.sh, and for the same reason.
+        for local in (os.path.join(here, "..", "..", "contracts", contract),
+                      os.path.join(here, "..", "contracts", contract)):
+            if os.path.exists(local):
+                break
+        path = at if os.path.exists(at) else local
+        if os.path.exists(path):
+            described += open(path, encoding="utf-8").read()
+    undescribed = sorted(k for k in keys if k not in described)
+    check("no field reaches a caller without being described anywhere",
+             not undescribed, undescribed)
+
+    print("\n== the documents against the answer they describe ==")
+    # THE PAGES DRIFTED FROM THE SHAPE THREE TIMES IN A WEEK, and every time a
+    # person found it, not a check. A document promising `pool_source` in every
+    # answer sends the reader to a field that is not there by default — the same
+    # class as a tool description of the wrong form, one layer out.
+    #
+    # THE RULE IS NARROW ON PURPOSE. A name that only `verbose` returns, or that
+    # lives inside `trouble`, may of course be discussed — but then the passage
+    # must say so: mention `verbose`, or write the name with its `trouble.`
+    # prefix, or stand in the section about upgrading. Bare, beside fields that
+    # do arrive, it is a promise the answer does not keep.
+    quiet_now = set(server.search_read(QUERY, n=2))
+    loud_now = set(server.search_read(QUERY, n=2, verbose=True))
+    trouble_names = {"search_aborted", "engines_unasked", "unresponsive_engines",
+                     "engines_irrelevant", "pool_unmeasured", "arguments_adjusted"}
+    # WHAT IS NOT SUSPICIOUS: arguments (a document must be free to name them),
+    # and fields that ARE top-level in a NEIGHBOURING tool — `arguments_adjusted`
+    # sits inside `trouble` for search and at the top level for reading, so a
+    # bare mention of it is legitimate somewhere.
+    argument_names = {a for t in server.TOOLS.values()
+                      for a in t["inputSchema"]["properties"]}
+    elsewhere = set(reader.read([])) | set(reader._shot_refusal("x", "why"))
+    suspicious = (((loud_now - quiet_now) | trouble_names)
+                  - {"trouble"} - argument_names - elsewhere)
+    for doc in ("README.md", "HOWTO-CALL.md"):
+        at = os.path.join("/docs", doc)
+        local = os.path.join(os.path.dirname(__file__), "..", doc)
+        path = at if os.path.exists(at) else local
+        check(f"{doc} is readable by this check (a skip would be a false green)",
+                 os.path.exists(path), path)
+        if not os.path.exists(path):
+            continue
+        # THE CONTEXT IS THE PARAGRAPH, NOT THE LINE. A table listing the keys of
+        # `trouble` says so in the sentence above it, and a check that reads one
+        # line at a time would call every row a broken promise — and a guard that
+        # shouts at healthy text gets switched off whole.
+        # A TABLE IS ITS OWN BLOCK, and the sentence introducing it is the one
+        # before. So the context is the heading plus the current block AND the
+        # previous one — a check narrower than that calls every row of a table
+        # about `trouble` a broken promise, and a guard that shouts at healthy
+        # text gets switched off whole.
+        section, para, prev, bad_lines = "", "", "", []
+        for line_no, line in enumerate(open(path, encoding="utf-8"), 1):
+            if line.startswith("#"):
+                section, para, prev = line.lower(), "", ""
+            if not line.strip():
+                prev, para = para, ""
+            else:
+                para += " " + line.lower()
+            low = (section + " " + prev + " " + para).lower()
+            if "verbose" in low or "upgrad" in low or "0.2.x" in low or "trouble" in low:
+                continue
+            # `pool_source: seed` is how a document names a field WITH a value,
+            # and a pattern matching only a bare name misses exactly the sentence
+            # that promises the most. Checked by corruption: without this the
+            # very line this guard was written for passes.
+            for word in _re.findall(r"`([a-z_]+)(?:[.:][^`]*)?`", line):
+                if word in suspicious:
+                    bad_lines.append(f"{line_no}: `{word}`")
+        check(f"{doc} promises no field that a default answer does not carry",
+                 not bad_lines, bad_lines[:4])
+
+    print("\n== a number that means `nobody else was asked` is not returned ==")
+    # FOUND BY A LIVE CONSUMER, FIRST CALL. On the cheap path the sweep stops at
+    # the first engine that gives enough links, so `corroborated_by_url` was 1 on
+    # every result — and 1 on a WIDE sweep means "three engines asked, one found
+    # it". Two different pieces of news under one number, standing next to
+    # `engines_trust` and reading as measured. A threshold gets built on it in a
+    # month.
+    #
+    # The rule is the mirror of the one behind `trouble`: a field whose value is
+    # legitimately fine cannot live where emptiness means "all well"; a field
+    # whose ONE means "we did not ask" cannot stand among the measured.
+    server._reset_rate()
+    MODE["body"] = REPLY
+    # n=1: the first engine suffices, so the sweep stops there and there is
+    # exactly one witness — the cheap path a caller gets by default.
+    narrow = server.search(QUERY, 1)
+    check("one witness: the corroboration fields are ABSENT, not equal to one",
+             all("corroborated_by_url" not in r and "corroborated_by_domain" not in r
+                 for r in narrow["results"]),
+             [sorted(r) for r in narrow["results"][:1]])
+    server._reset_rate()
+    wide = server.search(QUERY, 3, min_engines=3)
+    many = sorted({e.strip() for r in wide["results"]
+                   for e in r["via"].split(",") if e.strip()})
+    check("more than one witness: the fields come back, because now they mean something",
+             len(many) < 2 or all("corroborated_by_url" in r for r in wide["results"]),
+             (many, [sorted(r) for r in wide["results"][:1]]))
+    # AND THE ABSENCE IS NOT SILENCE: who was asked is still in the answer, and
+    # what went wrong is still in `trouble`.
+    check("who was asked is still said out loud",
+             bool(narrow["engines_asked"]), narrow["engines_asked"])
+
+    print("\n== EVERY exit of a tool has the same shape, refusals included ==")
+    # TWO REFUSAL PATHS USED TO RETURN THE RAW DICTIONARY: sixteen keys of the old
+    # form and NO `trouble` at all. An absent key means "this side was not
+    # examined" — and it appeared exactly where there was something to examine.
+    # Every suite was green, because every suite called the paths that were right.
+    #
+    # So the check walks the exits by name rather than trusting that they were
+    # remembered: an empty query, a pool the metasearch does not know, and a door
+    # that shut mid-sweep.
+    was_round3, was_split = server._round, server._split_known
+    try:
+        exits = {"empty query": lambda: server.image_search(""),
+                 "no engine known": None, "door shut": None}
+        server._split_known = lambda names: ((), tuple(names))
+        exits["no engine known"] = lambda: server.image_search(QUERY, n=2)
+        shapes = {name: set(fn()) for name, fn in exits.items() if fn}
+        server._split_known = was_split
+        server._round = lambda *a, **k: {"error": "metasearch unavailable"}
+        shapes["door shut"] = set(server.image_search(QUERY, n=2))
+    finally:
+        server._round, server._split_known = was_round3, was_split
+    server._reset_rate()
+    MODE["body"] = REPLY
+    good = set(server.image_search(QUERY, n=2))
+    for name, keys in shapes.items():
+        check(f"images, exit {name!r}: the same field set as a success",
+                 keys == good, sorted(keys ^ good))
+        check(f"images, exit {name!r}: `trouble` is there, not missing",
+                 "trouble" in keys, sorted(keys))
+    # AND WHAT IT SAYS THERE. On a refusal the pool state was never established;
+    # an empty `trouble` would report "checked, all well" about a call in which
+    # nothing was checked. Anything that is not `observation` is unmeasured.
+    check("a refusal admits the pool state is not established",
+             "pool_unmeasured" in server.image_search("")["trouble"],
+             server.image_search("")["trouble"])
+
+    # NEIGHBOURING TOOLS REPORT ONE EVENT THE SAME WAY. `n='abc'` was named by
+    # search and silently turned into twelve by images: one coercion, two
+    # behaviours, and the caller has to learn both.
+    server._reset_rate()
+    web = server.search_read(QUERY, n="abc")
+    img = server.image_search(QUERY, n="abc")
+    check("both tools NAME a number they could not read",
+             any("abc" in x for x in web["trouble"].get("arguments_adjusted", []))
+             and any("abc" in x for x in img["trouble"].get("arguments_adjusted", [])),
+             (web["trouble"].get("arguments_adjusted"),
+              img["trouble"].get("arguments_adjusted")))
+
+    print("\n== the description a MODEL reads against the answer it gets ==")
+    # THE ONE TEXT THE MODEL SEES IS `tools/list`, AND IT WENT STALE. The shape of
+    # the answer changed to /3 everywhere — code, contracts, README, HOWTO — and
+    # the tool description still promised nine top-level fields that a default
+    # answer does not contain, without the words `trouble` or `verbose` anywhere.
+    # We raised the contract number precisely so nobody would read a missing
+    # `search_aborted` as "nothing was aborted", and then kept promising it in the
+    # only place a caller is told to trust.
+    #
+    # SO THE CHECK COMPARES THE TEXT WITH A REAL ANSWER, not with our memory of
+    # it: names that only exist under `verbose` may be mentioned, but the text
+    # must say `verbose` when it does; names that only exist inside `trouble` may
+    # be mentioned, but the text must say `trouble`.
+    server._reset_rate()
+    MODE["body"] = REPLY
+    quiet_keys = set(server.search_read(QUERY, n=2))
+    loud_keys = set(server.search_read(QUERY, n=2, verbose=True))
+    item_keys = set(server.search_read(QUERY, n=2)["results"][0])
+    trouble_keys = {"search_aborted", "engines_unasked", "unresponsive_engines",
+                    "engines_irrelevant", "pool_unmeasured", "arguments_adjusted"}
+    for tool, quiet, loud, items in (
+            (server.TOOL, quiet_keys, loud_keys, item_keys),
+            (server.IMAGE_TOOL, set(server.image_search(QUERY, n=2)),
+             set(server.image_search(QUERY, n=2, verbose=True)), set())):
+        text = tool["description"]
+        args = set(tool["inputSchema"]["properties"])
+        verbose_only = (loud - quiet) - trouble_keys
+        named = {w for w in re.findall(r"[a-z][a-z_]{3,}", text)}
+        stale = {w for w in named & verbose_only if "verbose" not in text}
+        check(f"{tool['name']}: no field is promised at top level that only "
+                 f"`verbose` returns", not stale, sorted(stale))
+        in_trouble = named & (trouble_keys - quiet)
+        check(f"{tool['name']}: what lives inside `trouble` is named as such",
+                 not in_trouble or "trouble" in text, sorted(in_trouble))
+        # AND THE DEFAULT SHAPE IS DESCRIBED AT ALL: a caller must be able to
+        # learn from this text what arrives without asking for anything.
+        missing = {k for k in quiet if k not in text} - {"error", "ok"}
+        check(f"{tool['name']}: every field of the DEFAULT answer is described",
+                 not missing, sorted(missing))
+
+    print("\n== booleans are PARSED, and both doors parse them the same way ==")
+    # MEASURED ON A LIVE INSTANCE BY A CONSUMER: `"read": "false"` read the pages
+    # anyway — eight times the wall clock, seven times the payload — and
+    # `trouble` was empty. Numbers were clamped and named; booleans went through
+    # `bool(...)`, where every non-empty string is true. The field written
+    # against silent substitution covered half of it.
+    #
+    # WORSE: THE TWO DOORS DISAGREED ABOUT ONE WORD. Over MCP `"read": "false"`
+    # meant READ, over the plain door `read=false` meant do not. So every case
+    # here is checked at BOTH entrances — fixing one and leaving the other is the
+    # same defect in a new place.
+    server._reset_rate()
+    MODE["body"] = REPLY
+    for spelling, reads in (("false", False), ("False", False), ("FALSE", False),
+                            ("no", False), ("off", False), ("0", False),
+                            ("true", True), ("True", True), ("yes", True)):
+        _, r = post({"jsonrpc": "2.0", "id": 90, "method": "tools/call",
+                     "params": {"name": "web_search",
+                                "arguments": {"query": QUERY, "max_results": 2,
+                                              "read": spelling, "verbose": True}}})
+        mcp = json.loads(r["result"]["content"][0]["text"])
+        code, plain = get("/ag/search?q=" + urllib.parse.quote(QUERY)
+                          + "&n=2&verbose=1&read=" + spelling)
+        check(f"read={spelling!r} is understood the same at both doors",
+                 mcp["read"] is reads and plain["read"] is reads,
+                 (spelling, mcp["read"], plain["read"]))
+        check(f"read={spelling!r} is not reported as an adjustment — it was readable",
+                 not [x for x in mcp["trouble"].get("arguments_adjusted", [])
+                      if "read" in x], mcp["trouble"])
+    # AN EMPTY VALUE IS NOT AN ABSENT ONE, and the difference is checked at both
+    # doors. An exception returning the default silently would sit in the one
+    # place where the default is expensive: `"read": ""` buying three page loads
+    # and saying nothing. Absence keeps the default; emptiness is a value we
+    # could not read.
+    _, r = post({"jsonrpc": "2.0", "id": 95, "method": "tools/call",
+                 "params": {"name": "web_search",
+                            "arguments": {"query": QUERY, "max_results": 2,
+                                          "read": "", "verbose": True}}})
+    empty_mcp = json.loads(r["result"]["content"][0]["text"])
+    code, empty_plain = get("/ag/search?q=" + urllib.parse.quote(QUERY)
+                            + "&n=2&verbose=1&read=")
+    check("an EMPTY boolean does not buy the expensive default, at either door",
+             empty_mcp["read"] is False and empty_plain["read"] is False,
+             (empty_mcp["read"], empty_plain["read"]))
+    check("and it is named, so the caller sees what happened",
+             all(any("read=" in x for x in a["trouble"].get("arguments_adjusted", []))
+                 for a in (empty_mcp, empty_plain)),
+             (empty_mcp["trouble"], empty_plain["trouble"]))
+    # JSON `null` IS A PASSED VALUE, NOT AN ABSENCE. `args.get(name)` returns
+    # None for both, so without a mark of its own for "nothing passed" the two
+    # collapse — and `"read": null` would take the expensive default in silence
+    # while the STRING "null" turned the flag off. One word, two behaviours.
+    _, r = post({"jsonrpc": "2.0", "id": 97, "method": "tools/call",
+                 "params": {"name": "web_search",
+                            "arguments": {"query": QUERY, "max_results": 2,
+                                          "read": None, "verbose": True}}})
+    nulled = json.loads(r["result"]["content"][0]["text"])
+    check("JSON null is treated as a value we could not read, not as an absence",
+             nulled["read"] is False
+             and any("read=" in x for x in
+                     nulled["trouble"].get("arguments_adjusted", [])),
+             (nulled["read"], nulled["trouble"].get("arguments_adjusted")))
+    _, r = post({"jsonrpc": "2.0", "id": 96, "method": "tools/call",
+                 "params": {"name": "web_search",
+                            "arguments": {"query": QUERY, "max_results": 2,
+                                          "verbose": True}}})
+    absent = json.loads(r["result"]["content"][0]["text"])
+    check("an ABSENT argument still keeps the documented default, unreported",
+             absent["read"] is True
+             and not [x for x in absent["trouble"].get("arguments_adjusted", [])
+                      if "read" in x], (absent["read"], absent["trouble"]))
+
+    # AN UNREADABLE FLAG FALLS TO THE CHEAP SIDE, AND SAYS SO. Falling to the
+    # documented default would bill the caller eight times over for a typo and
+    # teach them nothing; every flag here buys something expensive when on.
+    for door in ("mcp", "plain"):
+        if door == "mcp":
+            _, r = post({"jsonrpc": "2.0", "id": 91, "method": "tools/call",
+                         "params": {"name": "web_search",
+                                    "arguments": {"query": QUERY, "max_results": 2,
+                                                  "read": "sometimes", "verbose": True}}})
+            answer = json.loads(r["result"]["content"][0]["text"])
+        else:
+            code, answer = get("/ag/search?q=" + urllib.parse.quote(QUERY)
+                               + "&n=2&verbose=1&read=sometimes")
+        check(f"{door}: rubbish in a boolean turns the flag OFF, not on",
+                 answer["read"] is False, answer["read"])
+        check(f"{door}: and it is NAMED in trouble, not swallowed",
+                 any("read=" in x and "not a boolean" in x
+                     for x in answer["trouble"].get("arguments_adjusted", [])),
+                 answer["trouble"])
+    # THE SAME FOR THE FLAG THAT MULTIPLIES OUTBOUND REQUESTS. Cast rather than
+    # parsed, a string switches corroboration ON: six requests to other people's
+    # services instead of one, from a value the schema calls a boolean.
+    _, r = post({"jsonrpc": "2.0", "id": 92, "method": "tools/call",
+                 "params": {"name": "web_search",
+                            "arguments": {"query": QUERY, "max_results": 2,
+                                          "corroborate": "false", "verbose": True}}})
+    corr = json.loads(r["result"]["content"][0]["text"])
+    check("corroborate='false' does NOT widen the sweep",
+             len(corr["engines_asked"]) <= 2, corr["engines_asked"])
+    # AND THE FLAGS OF THE OTHER TOOLS, so the fix is not "the one that was
+    # measured". Reading answers with its own list, added rather than moved: an
+    # addition breaks no consumer and needs no contract version.
+    # THROUGH THE DOOR, NOT BY A DIRECT CALL: the parse lives at the entrance,
+    # one place per door and one function for both. Calling `reader.read`
+    # directly is our INTERNAL path, where the arguments arrive already parsed.
+    _, r = post({"jsonrpc": "2.0", "id": 93, "method": "tools/call",
+                 "params": {"name": "web_read",
+                            "arguments": {"urls": [], "links": "perhaps"}}})
+    rd = json.loads(r["result"]["content"][0]["text"])
+    check("reading names an unreadable flag too, in its own answer",
+             any("links=" in x for x in rd.get("arguments_adjusted", [])),
+             rd.get("arguments_adjusted"))
+    _, r = post({"jsonrpc": "2.0", "id": 94, "method": "tools/call",
+                 "params": {"name": "web_read", "arguments": {"urls": []}}})
+    clean_rd = json.loads(r["result"]["content"][0]["text"])
+    check("and the field is there, empty, when every argument was usable",
+             clean_rd.get("arguments_adjusted") == [],
+             clean_rd.get("arguments_adjusted"))
+
+    print("\n== who called, as they say themselves ==")
+    # THE PROTOCOL CARRIES IT ALREADY. Thrown away, it leaves every client of an
+    # instance in one heap, and "a spike of refusals" is visible while "whose
+    # spike" is not.
+    #
+    # OVER HTTP A SESSION IS ONE CONNECTION, so the test speaks over a RAW
+    # connection rather than the helper above: urllib opens a fresh one per call,
+    # which is exactly the case that cannot be linked to any handshake — and that
+    # case is checked too, further down.
+    import http.client as _http
+
+    def talk(conn, body):
+        conn.request("POST", "/mcp", json.dumps(body),
+                     {"Content-Type": "application/json"})
+        return json.loads(conn.getresponse().read() or "{}")
+
+    host, port = base.split("//")[1].split(":")
+    named = _http.HTTPConnection(host, int(port))
+    talk(named, {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                 "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                            "clientInfo": {"name": "chat-under-test", "version": "9"}}})
+    talk(named, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+    nameless = _http.HTTPConnection(host, int(port))
+    talk(nameless, {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": {"protocolVersion": "2024-11-05", "capabilities": {}}})
+    talk(nameless, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+    silent_one = _http.HTTPConnection(host, int(port))
+    talk(silent_one, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    code, st = get("/stats")
+    by_client = st["by_client_says"]
+    check("the caller is counted under the name it gave in the handshake",
+             by_client.get("chat-under-test/9", 0) >= 2, by_client)
+    # THREE ABSENCES THAT ARE NOT ONE. A caller we could not link to any
+    # handshake, a caller that shook hands without naming itself, and a call at
+    # the plain door where the protocol has no handshake at all — one bucket for
+    # the three would hide which of them we are looking at.
+    check("a call with no handshake is `not_introduced`, not attributed by guess",
+             by_client.get("not_introduced", 0) >= 1, by_client)
+    check("a handshake with no clientInfo is its own state",
+             by_client.get("introduced_without_name", 0) >= 2, by_client)
+    check("the plain doors are counted apart: there is no handshake there",
+             by_client.get("plain_door", 0) >= 1, by_client)
+    # THE NAME IS SOMEBODY ELSE'S TEXT, AND IT BECOMES A KEY. Unbounded, that is a
+    # leak in a process meant to run for months, and it goes out in a view.
+    check("a long name is cut rather than stored whole",
+             len(server._client_name({"name": "x" * 400})) <= server.CLIENT_NAME_MAX + 20,
+             server._client_name({"name": "x" * 400}))
+    check("control characters do not reach the view",
+             "\n" not in server._client_name({"name": "a\nb"}),
+             server._client_name({"name": "a\nb"}))
+    check("clientInfo of the wrong shape does not raise, it is a missing name",
+             server._client_name("not a dict") == server.NO_NAME_GIVEN,
+             server._client_name("not a dict"))
+    was_counters = json.loads(json.dumps(server._counters))
+    try:
+        for i in range(server.CLIENT_KEYS_MAX + 5):
+            server._count_call("/probe", client=f"invented-{i}")
+        check("the number of names is capped — a client varying it cannot grow us",
+                 len(server._counters["by_client"]) <= server.CLIENT_KEYS_MAX + 1
+                 and server.TOO_MANY_CLIENTS in server._counters["by_client"],
+                 len(server._counters["by_client"]))
+    finally:
+        server._counters.update(was_counters)
+
     print("\n== the SECOND transport: MCP over stdio ==")
     # STDIO IS THE PROTOCOL'S DEFAULT TRANSPORT, and its absence was invisible
     # here because our only consumer speaks HTTP. A desktop client starts the
@@ -1605,8 +2341,28 @@ def main() -> int:
              parsed[-1]["error"]["code"] == -32700, parsed[-1])
     # THE DIAGNOSTICS DID NOT VANISH — they moved. A mode that silences the log
     # would trade one blindness for another.
-    check("what used to go to stdout is now on stderr, not lost",
+    check("the diagnostics are on stderr, not lost",
              "ag-mod-search" in run.stderr, run.stderr[:80])
+    # OVER STDIO A SESSION IS THE PROCESS: the handshake comes once and holds for
+    # every call down the same pipe. The opposite of HTTP, where the link lives
+    # only as long as the connection — and where a client that opens a new one
+    # per call is honestly counted as `not_introduced`.
+    talk_named = "\n".join([
+        json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                               "clientInfo": {"name": "stdio-chat", "version": "3"}}}),
+        json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+        json.dumps({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}),
+    ]) + "\n"
+    run2 = subprocess.run([sys.executable, os.path.join(os.path.dirname(server.__file__),
+                                                        "server.py"), "--stdio"],
+                          input=talk_named, capture_output=True, text=True, timeout=120,
+                          env={**os.environ, "SEARXNG_URL": "http://127.0.0.1:9"})
+    # The process counts internally; what is observable from outside is that all
+    # three answers came back on one handshake without the caller repeating it.
+    check("stdio keeps the handshake for the whole process: three in, three out",
+             len([l for l in run2.stdout.splitlines() if l.strip()]) == 3,
+             run2.stdout[:120])
 
     print("\n== the ok field is uniform across the contracts ==")
     # NEIGHBOURING TOOLS THAT CALL THE SAME THING BY DIFFERENT NAMES are a future
@@ -1614,9 +2370,9 @@ def main() -> int:
     # `ok` field on the screenshot, a caller with a shared `if not resp["ok"]`
     # would meet a refusal where all is well.
     answers = {
-        "ag.search/2": server.search("test", 1),
+        "ag.search/3": server.search("test", 1),
         "ag.read/2": reader.read([]),
-        "ag.images/2": server.image_search(""),
+        "ag.images/3": server.image_search(""),
         "ag.shot/1": reader.screenshot("https://пример.рф/нет"),
     }
     for name, resp in answers.items():
@@ -1626,7 +2382,7 @@ def main() -> int:
                  resp.get("contract") == name, resp.get("contract"))
     # AN EMPTY RESULT IS A SUCCESS in every contract where it is possible: "we
     # looked and found nothing" and "we could not look" are different outcomes.
-    check("ag.search/2: an empty result set is ok:true, not a refusal",
+    check("ag.search/3: an empty result set is ok:true, not a refusal",
              server.search("no such query zzz", 1).get("ok") is True)
 
     print("\n== images ==")
@@ -1647,15 +2403,25 @@ def main() -> int:
              REQUESTS[-1] if REQUESTS else "the fake metasearch got no request")
 
     server._reset_rate()
-    d = server.image_search("ghost automotive", n=3)
-    check("images: the contract is declared", d["contract"] == "ag.images/2", d.get("contract"))
+    MODE["body"] = IMAGE_REPLY
+    d = server.image_search("a picture", n=3)
+    check("images: the contract is declared", d["contract"] == "ag.images/3", d.get("contract"))
+    # THE RESULT SET MUST NOT BE EMPTY HERE, and that is a check in itself: the
+    # shape checks below used to hide behind `if d["results"]:`, so an empty
+    # answer made them all pass by not running.
+    check("images: the fixture produced a result set to check at all",
+             bool(d["results"]), d["results"])
+    # ONE SHAPE ON BOTH PATHS — the answers are compared as the caller sees
+    # them, that is, after shaping. Comparing a raw refusal with a shaped success
+    # would compare two different things and go green on a divergence.
+    refused_shape = server._shape(server._images_refusal("x"), False,
+                                  server.LOUD_IMAGES)
     check("images: the full field set on the failure path too",
-             set(server._images_refusal("x")) == set(d), 
-             set(server._images_refusal("x")) ^ set(d))
+             set(refused_shape) == set(d), set(refused_shape) ^ set(d))
     check("images: an empty query gives ok:false with a reason",
              server.image_search("")["ok"] is False)
-    if d["results"]:
-        r = d["results"][0]
+    if True:
+        r = (d["results"] or [{}])[0]
         check("an image has TWO addresses under different names",
                  "image_url" in r and "page_url" in r and "url" not in r, sorted(r))
         check("domain is computed from the IMAGE SOURCE, not from the page",

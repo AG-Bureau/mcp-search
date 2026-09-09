@@ -569,6 +569,11 @@ def _namesake_groups(sources: list[dict], markers: list[str]) -> list[list[int]]
 def _outcome(sources: list[dict], markers: list[str]) -> str:
     """found | off_target | not_found | unknown. Decided by ZEROES.
 
+    A fifth value exists that this function never returns: `not_attempted`, for a
+    call that was refused before any query went out. It is set in
+    `_blank_answer`, because the distinction it carries — "we did not look" —
+    cannot be derived from the corpus this function sees.
+
     There are NO numeric thresholds here, and that is a decision rather than an
     omission: two runs of the same question differed twofold in corpus size
     (237932 characters against 190275, 203613 against 99087). A threshold taken
@@ -944,9 +949,17 @@ def _digest(question: str, sources: list[dict], model_client,
 
 
 def _blank_answer(question: str, reason: str, **extra) -> dict:
-    """The full field set on the failure path too, as in every contract here."""
+    """The full field set on the failure path too, as in every contract here.
+
+    THE OUTCOME OF A SEARCH THAT NEVER RAN IS NOT "NOTHING WAS FOUND".
+    `not_found` is a RESULT — we looked, the sources were empty. A call refused
+    before the first query (no model configured, an empty question) never looked
+    at all, and giving both the same value hands a caller branching on `outcome`
+    the module's cardinal error: no data reported as a finding. The reason is in
+    `error`, but a caller who branches does not read prose.
+    """
     return {"contract": CONTRACT_NAME, "ok": False, "error": reason,
-            "question": question, "answer": "", "outcome": "not_found",
+            "question": question, "answer": "", "outcome": "not_attempted",
             "waves_done": 0, "waves_max": 0, "stopped_because": reason,
             "queries_asked": [], "queries_failed": [], "queries_empty": [],
             "markers": [], "markers_from": "",

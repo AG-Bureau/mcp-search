@@ -373,7 +373,7 @@ def record_usage(u: dict) -> bool:
 
 
 def usage_summary() -> dict:
-    """Ledger summary for the showcase. Never raises.
+    """Ledger summary for the views (`GET /stats`). Never raises.
 
     BROKEN LINES ARE COUNTED SEPARATELY, not skipped in silence: a ledger that
     quietly drops lines reports less spending than actually happened — it lies in

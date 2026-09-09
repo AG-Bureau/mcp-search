@@ -114,6 +114,85 @@ with `#` and there were `--`. The same applies to any embedded language — yaml
 a string, a shell fragment, a query. A guard must know which languages it has
 nested inside it, or it honestly reports zero over text it cannot see.
 
+**A FIELD EXISTS, ITS VALUE DOES NOT — and this has now bitten in four separate
+places.** `width` and `height` returned `null` on every screenshot ever taken;
+`corroborated_by_url` returned `1` where nobody else had been asked;
+`total_chars` reported our own ceiling as the size of somebody else's page; an
+empty `trouble` said "checked, all well" about a refusal where nothing had been
+checked. In each case the SHAPE promised data the module never had, and the
+caller could not tell "we did not measure" from "there is nothing to measure".
+
+The rule: a field is worth its place only if it can carry an answer. If the value
+cannot be established, the field must be ABSENT (and the absence documented), or
+carry a name that states what it really is — a floor, a claim, an engine's
+history. A name that promises more than the value delivers is a lie that no test
+detects, because the field is dutifully present and dutifully typed.
+
+**A MEASUREMENT THAT DEPENDS ON WORDING IS TAKEN ON THE FINAL WORDING, OR
+DECLARED SINGLE-USE AT THE MOMENT IT IS TAKEN.** Five of our eleven measurements
+carry "these numbers are void": the prompts were translated after the numbers
+were collected, so each file documents an edition of the code that no longer
+exists. Two paths led to this rule on the same day — counting the caveats, and an
+owner asking what one such file is still for — and a rule reached twice from
+different directions is worth more than one argued once.
+
+Two corollaries, both learned from the same file. **Probing a provider's model
+names tests OUR GUESSES, not their catalogue** — ask the provider's own index
+instead. And **sightedness is not visible in a model's name**: concluding "this
+model is text-only" from its name is inference from a neighbouring sign, the same
+error as reading a green guard as a sound file.
+
+**A TRIAL IS NEVER STRICTER THAN THE IMAGINATION OF WHOEVER BUILT IT.** Our fake
+site served what was asked for, at the declared length, uncompressed, at once. It
+could produce a redirect and a stub — the failures we had already thought of —
+and not one case of LEGITIMATE PATHOLOGY: nothing compressed, nothing arriving a
+byte at a time, no stream cut in the middle, no header lying about its own
+length. That is why three reviews, five suites and seven acceptance probes all
+came back green over four defects that a trap found in ten minutes.
+
+The mechanism is not that the trap was cleverer. It asked questions we had not
+asked ourselves, and a test bench assembled from our own expectations cannot
+contain what we did not expect.
+
+**So a bench is stocked from OTHER PEOPLE'S failures, not from our own
+predictions.** Every pathology a live site actually commits — slow delivery,
+compression, truncation, a header that lies — earns a permanent fixture the day
+it is met. What we imagine belongs there too, but it is the smaller half, and it
+is the half that is already covered by the code being written to it.
+
+**A SHARED PARSE PROVES SAMENESS ONLY FROM THE LAYER WHERE IT STANDS.** Two
+doors were made to read booleans through one function, and they still disagreed
+about one word: the caller wrote `?read=`, and by the time the shared code ran,
+the query parser had already dropped the empty parameter — so an argument that
+WAS written arrived as one that was never mentioned, and took the expensive
+default. The difference had moved above the common code, into the layer where an
+argument is still becoming an argument.
+
+Hence: check at the ENTRANCE, not at the parse. A test that calls the shared
+function proves the function; only a test that goes in through each door proves
+the doors. The same shape as a guard greening on a comment instead of on code —
+the instrument was sound and was aimed one layer away from the defect.
+
+**OUR OWN REVIEW CHECKS THAT THE TREE AGREES WITH ITSELF; SOMEBODY ELSE'S CALL
+CHECKS THE ASSUMPTIONS THAT WERE NEVER WRITTEN DOWN IN IT.** Not one check ever
+asked "what if a boolean arrives as a string", because inside the tree a boolean
+is a boolean by construction — the assumption was nowhere, so there was nothing
+to refute. Five consumers on the tool found in a day what five guards had not
+found in a day of reading the same lines. Consequence: a real caller is not a
+late stage of testing but a DIFFERENT INSTRUMENT, and the earliest one that can
+see this class at all. Until there is one, say so rather than counting the guards
+as coverage.
+
+**A SIGN AVAILABLE ONLY AT A COST THE CONSUMER CANNOT PAY DOES NOT EXIST FOR
+THEM.** Seven reading outcomes were separated, and the separation was counted as
+delivered. Measured at the consumer: the one field they would have branched on
+arrives only together with the reading itself — four to ten seconds and some
+seven and a half thousand characters — and then sinks under the text they
+truncate. The distinction existed in the answer and not in their reach, which is
+the same as not existing. A capability is finished when the sign that carries it
+is affordable ON THE PATH THE CONSUMER ACTUALLY TAKES, not when the field is
+present.
+
 **AN INSTALLATION INSTRUCTION CANNOT BE CHECKED BY ANYONE WHO HAS ALREADY
 INSTALLED.** They perform the missing steps by reflex and never notice the
 absence. A published `## Install` began at `cp .env.example .env` — no clone, no

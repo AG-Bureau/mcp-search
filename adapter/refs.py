@@ -12,8 +12,8 @@ Two copies of one set drift apart silently, and here the drift would be
 especially quiet: change the references in one place and the verdict starts
 selecting probes by strings nobody writes any more. Zero observations, everyone
 "unverified", `all_engines_clean` false. The failure direction is safe, so
-nobody gets alarmed — the showcase honestly reports "unverified" for months
-while the real cause, two diverged copies, is named nowhere.
+nobody gets alarmed — the views honestly report "unverified" for months while
+the real cause, two diverged copies, is named nowhere.
 
 THE `confirmed` FLAG IS NOT ABOUT REFERENCE QUALITY, IT IS ABOUT HOW IT WAS
 CHECKED. The substitution verdict counts only references whose domain was
@@ -33,8 +33,8 @@ import hashlib
 #   rikor-electronics.ru  200 and a matching title
 #   sberbank.ru           200 and a certificate from the national CA
 #   python.org            200
-#   mosmetro.ru           times out from our network — NOT confirmed
-#   openai.com            403 from Cloudflare on two different hosts — NOT confirmed
+#   mosmetro.ru           times out from the machine this was measured on — NOT confirmed
+#   openai.com            403 from a CDN on two different hosts — NOT confirmed
 #
 # A reference set mixing languages is deliberate: engines differ in which
 # language they index well, and a single-language set would select engines by a

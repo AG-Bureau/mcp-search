@@ -188,6 +188,50 @@ def main() -> int:
     check("images have a seed of their own, not a shared one",
              pool.SEEDS["images"] != pool.SEEDS["general"], pool.SEEDS)
 
+    print("\n== the door the ADAPTER actually uses ==")
+    # `read_pool` IS THE ONLY WAY THE ADAPTER LEARNS THE COMPUTED POOL, and the
+    # suite touched it once, with a missing file — that is, only the refusal.
+    # Everything else here exercises `recompute`, which WRITES. If the reading
+    # side broke, every check stayed green and the module quietly fell back to
+    # the seed — announcing it honestly in `pool_source`, which is exactly what
+    # would make the breakage look like normal life.
+    #
+    # A REAL FILE, NOT `:memory:`: the adapter opens the database by PATH and
+    # read-only, and an in-memory connection cannot prove that path works.
+    import tempfile
+    with tempfile.TemporaryDirectory() as folder:
+        db_path = os.path.join(folder, "engines.db")
+        live = sqlite3.connect(db_path)
+        live.executescript(SCHEMA)
+        for engine in ("alpha", "beta"):
+            fill_probes(live, engine, 40, 40)
+        for engine in ("gamma", "delta"):
+            fill_probes(live, engine, 40, 4, category="images")
+        computed = pool.recompute(live, "general")
+        pool.recompute(live, "images")
+        live.commit()
+        live.close()
+
+        got = pool.read_pool(db_path)
+        check("a computed pool is READ BACK from a real file, not re-derived",
+                 got["source"] == "observation" and got["pool"] == computed["pool"],
+                 (got.get("source"), got.get("pool"), computed["pool"]))
+        check("and it says WHEN, so a stale pool can be told from a fresh one",
+                 isinstance(got.get("when"), int), got.get("when"))
+        # THE CATEGORY IS PART OF THE QUESTION. Reading the image pool must not
+        # hand back the web one: two categories in one table are told apart here
+        # or nowhere.
+        img = pool.read_pool(db_path, "images")
+        check("the image pool is read from its own category, not from the web one",
+                 img["source"] == "observation" and img["pool"] != got["pool"],
+                 (img.get("pool"), got.get("pool")))
+        # A DATABASE THAT EXISTS AND IS UNREADABLE IS NOT AN EMPTY ONE.
+        broken = os.path.join(folder, "broken.db")
+        open(broken, "wb").write(b"this is not a database")
+        hurt = pool.read_pool(broken)
+        check("a corrupt database gives the SEED and names the trouble",
+                 hurt["source"] == "seed" and hurt["reason"], hurt)
+
     print("\n== failure direction ==")
     result = pool.read_pool("/no/such/file.db")
     check("no database — the seed is returned, and that is NAMED",
